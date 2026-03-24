@@ -1,0 +1,276 @@
+{
+  "last_node_id": 15,
+  "last_link_id": 20,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "CheckpointLoaderSimple",
+      "pos": [50, 100],
+      "size": [315, 98],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "outputs": [
+        {"name": "MODEL", "type": "MODEL", "links": [1]},
+        {"name": "CLIP", "type": "CLIP", "links": [2]},
+        {"name": "VAE", "type": "VAE", "links": [3]}
+      ],
+      "properties": {},
+      "widgets_values": ["flux1-dev-fp8.safetensors"]
+    },
+    {
+      "id": 2,
+      "type": "LoraLoader",
+      "pos": [400, 100],
+      "size": [315, 126],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [
+        {"name": "model", "type": "MODEL", "link": 1},
+        {"name": "clip", "type": "CLIP", "link": 2}
+      ],
+      "outputs": [
+        {"name": "MODEL", "type": "MODEL", "links": [4]},
+        {"name": "CLIP", "type": "CLIP", "links": [5]}
+      ],
+      "properties": {},
+      "widgets_values": ["flux_turbo_lora.safetensors", 0.8, 1.0]
+    },
+    {
+      "id": 3,
+      "type": "LoadImage",
+      "pos": [50, 300],
+      "size": [315, 314],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "outputs": [
+        {"name": "IMAGE", "type": "IMAGE", "links": [6]},
+        {"name": "MASK", "type": "MASK", "links": null}
+      ],
+      "properties": {},
+      "widgets_values": ["lifestyle_reference.jpg", "image"]
+    },
+    {
+      "id": 4,
+      "type": "CannyEdgePreprocessor",
+      "pos": [400, 300],
+      "size": [315, 82],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {"name": "image", "type": "IMAGE", "link": 6}
+      ],
+      "outputs": [
+        {"name": "IMAGE", "type": "IMAGE", "links": [7]}
+      ],
+      "properties": {},
+      "widgets_values": [100, 200, 512]
+    },
+    {
+      "id": 5,
+      "type": "MiDaS-DepthMapPreprocessor",
+      "pos": [400, 450],
+      "size": [315, 82],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {"name": "image", "type": "IMAGE", "link": 6}
+      ],
+      "outputs": [
+        {"name": "IMAGE", "type": "IMAGE", "links": [8]}
+      ],
+      "properties": {},
+      "widgets_values": [6.283185307179586, 0.1, 512]
+    },
+    {
+      "id": 6,
+      "type": "IPAdapterApply",
+      "pos": [750, 100],
+      "size": [315, 258],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {"name": "ipadapter", "type": "IPADAPTER", "link": null},
+        {"name": "clip_vision", "type": "CLIP_VISION", "link": null},
+        {"name": "image", "type": "IMAGE", "link": 6},
+        {"name": "model", "type": "MODEL", "link": 4}
+      ],
+      "outputs": [
+        {"name": "MODEL", "type": "MODEL", "links": [9]}
+      ],
+      "properties": {},
+      "widgets_values": [0.7, 0.0, "linear", 0.0, 1.0, false]
+    },
+    {
+      "id": 7,
+      "type": "ControlNetApply",
+      "pos": [1100, 100],
+      "size": [315, 166],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {"name": "conditioning", "type": "CONDITIONING", "link": 10},
+        {"name": "control_net", "type": "CONTROL_NET", "link": null},
+        {"name": "image", "type": "IMAGE", "link": 7}
+      ],
+      "outputs": [
+        {"name": "CONDITIONING", "type": "CONDITIONING", "links": [11]}
+      ],
+      "properties": {},
+      "widgets_values": [0.6]
+    },
+    {
+      "id": 8,
+      "type": "ControlNetApply",
+      "pos": [1100, 350],
+      "size": [315, 166],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [
+        {"name": "conditioning", "type": "CONDITIONING", "link": 11},
+        {"name": "control_net", "type": "CONTROL_NET", "link": null},
+        {"name": "image", "type": "IMAGE", "link": 8}
+      ],
+      "outputs": [
+        {"name": "CONDITIONING", "type": "CONDITIONING", "links": [12]}
+      ],
+      "properties": {},
+      "widgets_values": [0.6]
+    },
+    {
+      "id": 9,
+      "type": "CLIPTextEncode",
+      "pos": [750, 400],
+      "size": [400, 200],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [
+        {"name": "clip", "type": "CLIP", "link": 5}
+      ],
+      "outputs": [
+        {"name": "CONDITIONING", "type": "CONDITIONING", "links": [10]}
+      ],
+      "properties": {},
+      "widgets_values": ["生活场景，产品使用展示，自然光线，真实环境，模特互动，温馨氛围，高清细节，专业摄影"]
+    },
+    {
+      "id": 10,
+      "type": "CLIPTextEncode",
+      "pos": [750, 650],
+      "size": [400, 200],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [
+        {"name": "clip", "type": "CLIP", "link": 5}
+      ],
+      "outputs": [
+        {"name": "CONDITIONING", "type": "CONDITIONING", "links": [13]}
+      ],
+      "properties": {},
+      "widgets_values": ["模糊，低质，畸形，水印，文字，变形，扭曲，噪点，过曝，欠曝，杂乱背景"]
+    },
+    {
+      "id": 11,
+      "type": "EmptyLatentImage",
+      "pos": [1450, 100],
+      "size": [315, 106],
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "outputs": [
+        {"name": "LATENT", "type": "LATENT", "links": [14]}
+      ],
+      "properties": {},
+      "widgets_values": [1024, 1024, 1]
+    },
+    {
+      "id": 12,
+      "type": "KSampler",
+      "pos": [1450, 300],
+      "size": [315, 262],
+      "flags": {},
+      "order": 11,
+      "mode": 0,
+      "inputs": [
+        {"name": "model", "type": "MODEL", "link": 9},
+        {"name": "positive", "type": "CONDITIONING", "link": 12},
+        {"name": "negative", "type": "CONDITIONING", "link": 13},
+        {"name": "latent_image", "type": "LATENT", "link": 14}
+      ],
+      "outputs": [
+        {"name": "LATENT", "type": "LATENT", "links": [15]}
+      ],
+      "properties": {},
+      "widgets_values": [42, "fixed", 8, 3.5, "dpmpp_2m_sde_gpu", "karras", 0.6]
+    },
+    {
+      "id": 13,
+      "type": "VAEDecode",
+      "pos": [1800, 300],
+      "size": [210, 46],
+      "flags": {},
+      "order": 12,
+      "mode": 0,
+      "inputs": [
+        {"name": "samples", "type": "LATENT", "link": 15},
+        {"name": "vae", "type": "VAE", "link": 3}
+      ],
+      "outputs": [
+        {"name": "IMAGE", "type": "IMAGE", "links": [16]}
+      ],
+      "properties": {}
+    },
+    {
+      "id": 14,
+      "type": "SaveImage",
+      "pos": [1800, 400],
+      "size": [315, 270],
+      "flags": {},
+      "order": 13,
+      "mode": 0,
+      "inputs": [
+        {"name": "images", "type": "IMAGE", "link": 16}
+      ],
+      "properties": {},
+      "widgets_values": ["deyes_detail_"]
+    }
+  ],
+  "links": [
+    [1, 1, 0, 2, 0, "MODEL"],
+    [2, 1, 1, 2, 1, "CLIP"],
+    [3, 1, 2, 13, 1, "VAE"],
+    [4, 2, 0, 6, 3, "MODEL"],
+    [5, 2, 1, 9, 0, "CLIP"],
+    [6, 3, 0, 4, 0, "IMAGE"],
+    [7, 4, 0, 7, 2, "IMAGE"],
+    [8, 5, 0, 8, 2, "IMAGE"],
+    [9, 6, 0, 12, 0, "MODEL"],
+    [10, 9, 0, 7, 0, "CONDITIONING"],
+    [11, 7, 0, 8, 0, "CONDITIONING"],
+    [12, 8, 0, 12, 1, "CONDITIONING"],
+    [13, 10, 0, 12, 2, "CONDITIONING"],
+    [14, 11, 0, 12, 3, "LATENT"],
+    [15, 12, 0, 13, 0, "LATENT"],
+    [16, 13, 0, 14, 0, "IMAGE"]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "workflow_name": "Deyes 详情页生成工作流 v4.0",
+    "description": "FLUX.1-dev + Turbo LoRA + IPAdapter + ControlNet (生活场景)",
+    "performance": "10-15秒/张，17,280张/天",
+    "gpu_allocation": "卡2-3 (24GB)",
+    "resolution": "1024x1024",
+    "quality_score": "88-90分"
+  },
+  "version": 0.4
+}

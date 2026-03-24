@@ -1,0 +1,193 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: deyes-postgres
+    environment:
+      POSTGRES_DB: deyes
+      POSTGRES_USER: deyes
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - /data/deyes/postgres:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - deyes_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U deyes"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: deyes-redis
+    command: redis-server --appendonly yes --maxmemory 2gb --maxmemory-policy allkeys-lru
+    volumes:
+      - /data/deyes/redis:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - deyes_network
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: deyes-qdrant
+    volumes:
+      - /data/deyes/qdrant:/qdrant/storage
+    ports:
+      - "6333:6333"
+    networks:
+      - deyes_network
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    container_name: deyes-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: admin
+      MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD}
+    volumes:
+      - /data/deyes/minio:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    networks:
+      - deyes_network
+    restart: unless-stopped
+
+  sglang:
+    image: lmsysorg/sglang:latest
+    container_name: deyes-sglang
+    network_mode: host
+    ipc: host
+    environment:
+      - NCCL_DEBUG=INFO
+      - NCCL_IB_DISABLE=1
+      - CUDA_MODULE_LOADING=LAZY
+    command: >
+      python -m sglang.launch_server
+      --model-path /models/Qwen3___5-35B-A3B-FP8
+      --tp 2
+      --mem-fraction-static 0.85
+      --port 30000
+      --host 0.0.0.0
+    volumes:
+      - /data/deyes/models/llm:/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['6', '7']
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  comfyui-1:
+    image: zeroclue/comfyui:base-py3.13-cu128
+    container_name: deyes-comfyui-1
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - PRESET_DOWNLOAD=WAN_22_5B_TIV2,WAN22_I2V_A14B_GGUF_Q8_0,FLUX_DEV_BASIC,REALVIS_XL_V4
+      - ACCESS_PASSWORD=wj173749
+      - PRESET_DOWNLOAD=WAN_22_5B_TIV2,WAN22_I2V_A14B_GGUF_Q8_0,WAN22_LIGHTNING_LORA
+      - IMAGE_PRESET_DOWNLOAD=FLUX_DEV_BASIC,REALVIS_XL_V4,JUGGERNAUT_XL_V8,ESRGAN_MODELS,INPAINTING_MODELS
+      - HF_ENDPOINT=https://hf-mirror.com
+      - HF_HUB_ENABLE_HF_TRANSFER=1
+      - TZ=Asia/Shanghai
+      - INSTALL_EXTRA_NODES=true
+      - ENABLE_PRESET_MANAGER=false
+    volumes:
+      - /data/deyes/comfyui/workspace-1:/workspace
+    ports:
+      - "3000:3000"
+      - "8082:8082"
+    networks:
+      - deyes_network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['0']
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  backend:
+    image: deyes-backend-runtime:latest
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: deyes-backend
+    environment:
+      DATABASE_URL: postgresql://deyes:${POSTGRES_PASSWORD}@postgres:5432/deyes
+      REDIS_URL: redis://redis:6379/0
+      SGLANG_BASE_URL: http://host.docker.internal:30000/v1
+      SGLANG_MODEL: Qwen/Qwen3.5-35B-A3B
+      LOG_LEVEL: INFO
+      ENVIRONMENT: production
+    volumes:
+      - ./backend:/app
+    ports:
+      - "8000:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - deyes_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    restart: unless-stopped
+
+  worker:
+    image: deyes-backend-runtime:latest
+    container_name: deyes-worker
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=4
+    environment:
+      DATABASE_URL: postgresql://deyes:${POSTGRES_PASSWORD}@postgres:5432/deyes
+      REDIS_URL: redis://redis:6379/0
+      SGLANG_BASE_URL: http://host.docker.internal:30000/v1
+      SGLANG_MODEL: Qwen/Qwen3.5-35B-A3B
+      LOG_LEVEL: INFO
+      ENVIRONMENT: production
+    volumes:
+      - ./backend:/app
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - deyes_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    restart: unless-stopped
+
+  frontend:
+    image: node:22-alpine
+    container_name: deyes-frontend
+    working_dir: /app
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0 --port 5173"
+    environment:
+      VITE_PROXY_TARGET: http://backend:8000
+      VITE_API_BASE_URL: /api/v1
+    volumes:
+      - ./frontend:/app
+    ports:
+      - "5173:5173"
+    networks:
+      - deyes_network
+    depends_on:
+      backend:
+        condition: service_started
+    restart: unless-stopped
+
+networks:
+  deyes_network:
+    driver: bridge

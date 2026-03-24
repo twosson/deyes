@@ -1,0 +1,39 @@
+{
+  "name": "deyes-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@ant-design/icons-vue": "^7.0.1",
+    "@tanstack/vue-query": "^5.76.1",
+    "ant-design-vue": "^4.2.6",
+    "axios": "^1.9.0",
+    "dayjs": "^1.11.13",
+    "echarts": "^5.6.0",
+    "pinia": "^3.0.2",
+    "vue": "^3.5.13",
+    "vue-echarts": "^7.0.3",
+    "vue-i18n": "^10.0.5",
+    "vue-router": "^4.5.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.53.0",
+    "@testing-library/vue": "^8.1.0",
+    "@types/node": "^22.15.30",
+    "@vue/tsconfig": "^0.7.0",
+    "@vitejs/plugin-vue": "^5.2.4",
+    "jsdom": "^26.1.0",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5",
+    "vitest": "^3.2.4",
+    "vue-tsc": "^2.2.10"
+  }
+}

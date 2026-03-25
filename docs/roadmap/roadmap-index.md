@@ -1,8 +1,8 @@
 # Deyes 路线图与实施清单总览
 
-> 目标：为产品、研发、测试和管理协作提供统一入口，串联产品路线图、研发路线图与 Stage 1-6 实施任务清单。
+> 目标：为产品、研发、测试和管理协作提供统一入口，串联产品路线图、研发路线图、Stage 1-6 实施任务清单与执行版 backlog。
 >
-> 版本: v1.1
+> 版本: v1.2
 > 创建时间: 2026-03-25
 > 更新时间: 2026-03-25
 
@@ -48,6 +48,32 @@
    - `docs/roadmap/stage6-implementation-tasks.md`
    - 主题：生命周期引擎、自动动作引擎、异常检测、控制台、审批与回滚
 
+### 执行版 Backlog
+
+9. **Stage 1 Development Backlog**
+   - `docs/roadmap/stage1-development-backlog.md`
+   - 主题：Batch 1-4、owner lane、PR 切分、blocker、MVP 子集
+
+10. **Stage 2 Development Backlog**
+    - `docs/roadmap/stage2-development-backlog.md`
+    - 主题：反馈特征、adapter 注入、解释性输出的执行层拆解
+
+11. **Stage 3 Development Backlog**
+    - `docs/roadmap/stage3-development-backlog.md`
+    - 主题：ERP Lite 核心 schema / service / procurement / inventory 的执行层拆解
+
+12. **Stage 4 Development Backlog**
+    - `docs/roadmap/stage4-development-backlog.md`
+    - 主题：订单、售后、利润台账、反馈兼容的执行层拆解
+
+13. **Stage 5 Development Backlog**
+    - `docs/roadmap/stage5-development-backlog.md`
+    - 主题：平台注册、UnifiedListing、策略层、地区化、多币种、本地化内容的执行层拆解
+
+14. **Stage 6 Development Backlog**
+    - `docs/roadmap/stage6-development-backlog.md`
+    - 主题：生命周期引擎、自动动作引擎、异常检测、控制台、override、回滚的执行层拆解
+
 ---
 
 ## 2. 项目总览摘要
@@ -56,8 +82,10 @@
 
 - 核心路线图文档：**2 份**
 - 分阶段实施清单：**6 份**
+- 执行版 backlog：**6 份**（Stage 1-6）
 - 已拆解实施任务：**112 项**（Stage 1-6）
-- 覆盖范围：**从表现回流、反馈引擎、ERP Lite 核心，到多平台经营与自动化控制平面**
+- 已进入执行层拆解的阶段：**Stage 1-6**
+- 覆盖范围：**从表现回流、反馈引擎、ERP Lite 核心、真实经营损益层，到多平台统一经营与自动化控制平面**
 
 ### 当前阶段化定位
 
@@ -66,6 +94,10 @@
   - 当前尚未单独拆成独立任务清单文档
 - **Stage 1-6**：已全部完成实施任务拆解
   - 可直接用于排期、立项、架构评审和研发拆分
+- **Stage 1-4**：已完成执行版 backlog 拆解
+  - 可直接用于项目管理工具建卡、分工、PR 切分和冲刺执行
+- **Stage 5-6**：已完成执行版 backlog 拆解
+  - 可用于多平台统一经营中枢与自动化控制平面的排期、分工与执行推进
 
 ### 一句话理解整套规划
 
@@ -108,12 +140,26 @@ Candidate → SKU → Listing → Order → Profit → Feedback → Automated Ac
 | 包 2：ERP Lite 核心 | Stage 3 + Stage 4 | 38 | 超大型 | 让系统拥有商品、供应链、订单、售后、利润的长期事实层 |
 | 包 3：规模化经营 | Stage 5 + Stage 6 | 39 | 超大型 | 让系统支持跨平台统一管理，并开始自动执行经营动作 |
 
-### 3.3 管理视角下的结论
+### 3.3 执行层覆盖情况
+
+| 阶段 | 是否已有执行版 backlog | 推荐用途 |
+|------|----------------------|---------|
+| Stage 1 | 是 | 直接开工、建卡、切 PR |
+| Stage 2 | 是 | 反馈引擎增强、adapter 接入、测试推进 |
+| Stage 3 | 是 | ERP Lite 核心实体与服务排期 |
+| Stage 4 | 是 | 订单/退款/利润层排期与集成推进 |
+| Stage 5 | 是 | 多平台统一经营中枢排期与策略层推进 |
+| Stage 6 | 是 | 自动化控制平面排期、审批回滚与控制台推进 |
+
+### 3.4 管理视角下的结论
 
 - **Stage 1-2** 适合定义为“先把闭环跑通”的第一优先级开发包
 - **Stage 3-4** 是从“优化工具”升级为“经营系统”的关键分水岭
 - **Stage 5-6** 不建议过早投入，应该建立在事实层和利润层稳定之后
 - 从任务规模看，**Stage 3-6 没有一个是真正的小包**，都应该按独立阶段治理，而不是当作顺手增强
+- 当前在文档层已具备从 **Stage 1-6** 全阶段执行版 backlog
+- 实际项目管理工具最适合优先直接执行的仍是：**Stage 1-4**，Stage 5-6 更适合作为后续排期准备
+- Stage 5-6 backlog 已生成，可用于后续多平台与自动化控制平面的排期与拆分
 
 ---
 
@@ -134,21 +180,20 @@ Candidate → SKU → Listing → Order → Profit → Feedback → Automated Ac
 建议按以下顺序阅读：
 1. `engineering-roadmap-2026.md`
 2. 本文档
-3. `stage1-implementation-tasks.md`
-4. `stage2-implementation-tasks.md`
-5. `stage3-implementation-tasks.md`
-6. `stage4-implementation-tasks.md`
-7. `stage5-implementation-tasks.md`
-8. `stage6-implementation-tasks.md`
+3. `stage1-development-backlog.md`
+4. `stage2-development-backlog.md`
+5. `stage3-development-backlog.md`
+6. `stage4-development-backlog.md`
+7. 需要看阶段原始范围时，再回看对应 implementation tasks 文档
 
 ### 面向项目启动会 / 排期会
 
 建议使用顺序：
 1. `engineering-roadmap-2026.md` 中的“当前最优先研发事项”
 2. 本文档中的“工作量总表”和“建议执行顺序”
-3. `stage1-implementation-tasks.md` 作为首个开发包
-4. `stage2-implementation-tasks.md` 作为反馈闭环增强包
-5. `stage3-implementation-tasks.md` 作为 ERP Lite 核心包
+3. `stage1-development-backlog.md` 作为首个开发包执行入口
+4. `stage2-development-backlog.md` 作为反馈闭环增强包执行入口
+5. `stage3-development-backlog.md` 与 `stage4-development-backlog.md` 作为 ERP Lite 核心排期入口
 
 ---
 
@@ -297,8 +342,10 @@ Stage 6 自动化经营控制平面
 优先使用：
 - `engineering-roadmap-2026.md`
 - 本文档
-- `stage1-implementation-tasks.md`
-- `stage2-implementation-tasks.md`
+- `stage1-development-backlog.md`
+- `stage2-development-backlog.md`
+- `stage3-development-backlog.md`
+- `stage4-development-backlog.md`
 
 ### 如果要做季度规划 / 资源排期
 优先使用：
@@ -312,12 +359,14 @@ Stage 6 自动化经营控制平面
 - `stage2-implementation-tasks.md`
 - `stage3-implementation-tasks.md`
 - `stage4-implementation-tasks.md`
+- 必要时补看对应 development backlog
 
 ### 如果要做项目管理看板
 建议把各 Stage 文档中的任务直接映射为：
 - Epic = Stage
 - Feature Group = 分组 A/B/C/D/E
 - Story / Task = 每个编号任务（如 A1 / B3 / E2）
+- 如果已进入执行阶段，优先使用 development backlog 中的 `Sx-xx` 编号
 
 ---
 
@@ -325,12 +374,12 @@ Stage 6 自动化经营控制平面
 
 ### P0
 1. 固化 Stage 0 测试分层与回归入口
-2. 开始 Stage 1 的表现数据回流与 schema 实现
-3. 在 Stage 1 稳定后推进 Stage 2 反馈引擎增强
+2. 按 `stage1-development-backlog.md` 开始 Stage 1 Batch 1
+3. 在 Stage 1 稳定后按 `stage2-development-backlog.md` 推进反馈引擎增强
 
 ### P1
-1. 设计 Stage 3 的 Product / SKU / Supplier / Inventory 核心模型
-2. 为 Stage 4 的订单 / 利润台账预留实体关系
+1. 预先评审 `stage3-development-backlog.md` 中的 Product / SKU / Supplier / Inventory 核心模型
+2. 为 `stage4-development-backlog.md` 中的订单 / 利润台账预留实体关系
 
 ### P2
 1. 平台策略层
@@ -345,13 +394,14 @@ Stage 6 自动化经营控制平面
 1. 产品方向变化先更新 `product-roadmap-2026.md`
 2. 技术边界变化先更新 `engineering-roadmap-2026.md`
 3. 进入具体实施前再更新对应 Stage 的实施清单
-4. 每个 Stage 完成后补一份 verification checklist 或阶段总结
-5. 避免在多个文档里维护冲突版本的任务描述
-6. 新增 Stage 级文档时，同步更新本总览中的导航和工作量总表
+4. 进入执行阶段后，新增或维护对应 Stage 的 development backlog
+5. 每个 Stage 完成后补一份 verification checklist 或阶段总结
+6. 避免在多个文档里维护冲突版本的任务描述
+7. 新增 Stage 级文档时，同步更新本总览中的导航和工作量总表
 
 ---
 
-**文档版本**: v1.1
+**文档版本**: v1.2
 **创建时间**: 2026-03-25
 **更新时间**: 2026-03-25
 **维护者**: Deyes 研发团队

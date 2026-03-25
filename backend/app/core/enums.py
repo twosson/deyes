@@ -104,3 +104,11 @@ class TargetPlatform(str, Enum):
     WALMART = "walmart"
     RAKUTEN = "rakuten"
     ALLEGRO = "allegro"
+
+
+class ExperimentStatus(str, Enum):
+    """Experiment status."""
+    DRAFT = "draft"
+    ACTIVE = "active"
+    COMPLETED = "completed"
+    ARCHIVED = "archived"

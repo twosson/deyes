@@ -24,6 +24,7 @@ from app.core.enums import (
     AgentRunStatus,
     AssetType,
     CandidateStatus,
+    ExperimentStatus,
     PlatformListingStatus,
     ProductLifecycle,
     ProfitabilityDecision,
@@ -143,6 +144,7 @@ class CandidateProduct(Base, UpdateTimestampMixin):
     # Phase 1 新增关系
     content_assets: Mapped[list["ContentAsset"]] = relationship(back_populates="candidate")
     platform_listings: Mapped[list["PlatformListing"]] = relationship(back_populates="candidate")
+    experiments: Mapped[list["Experiment"]] = relationship(back_populates="candidate")
 
 
 class SupplierMatch(Base, TimestampMixin):
@@ -463,6 +465,47 @@ class AssetPerformanceDaily(Base, UpdateTimestampMixin):
     # Relationships
     asset: Mapped["ContentAsset"] = relationship(back_populates="performance_daily")
     listing: Mapped["PlatformListing"] = relationship(back_populates="asset_performance_daily")
+
+
+class Experiment(Base, UpdateTimestampMixin):
+    """A/B test experiment for content asset variants.
+
+    Tracks experiments comparing multiple content asset variants (identified by variant_group)
+    to determine which performs best based on a chosen metric (e.g., CTR).
+    """
+
+    __tablename__ = "experiments"
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    candidate_product_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("candidate_products.id"), nullable=False, index=True
+    )
+
+    # Experiment metadata
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    status: Mapped[ExperimentStatus] = mapped_column(
+        SAEnum(ExperimentStatus, native_enum=False), nullable=False, default=ExperimentStatus.DRAFT
+    )
+
+    # Optional filters
+    target_platform: Mapped[Optional[TargetPlatform]] = mapped_column(
+        SAEnum(TargetPlatform, native_enum=False)
+    )
+    region: Mapped[Optional[str]] = mapped_column(String(10))
+
+    # Experiment configuration
+    metric_goal: Mapped[str] = mapped_column(String(50), nullable=False, default="ctr")  # "ctr", "cvr", "roas"
+
+    # Winner selection
+    winner_variant_group: Mapped[Optional[str]] = mapped_column(String(100))
+    winner_selected_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+    # Notes
+    notes: Mapped[Optional[str]] = mapped_column(Text)
+    metadata_: Mapped[Optional[dict]] = mapped_column("metadata", JSON)
+
+    # Relationships
+    candidate: Mapped["CandidateProduct"] = relationship(back_populates="experiments")
 
 
 class ListingAssetAssociation(Base):

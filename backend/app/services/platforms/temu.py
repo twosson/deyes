@@ -257,13 +257,21 @@ class TemuAdapter(PlatformAdapter):
                 data={"sku": platform_listing_id},
             )
 
+            price = response.get("price")
+            sales = response.get("sales_count")
+            orders = response.get("order_count")
+            units_sold = response.get("units_sold")
+
             return {
-                "sku": response.get("sku"),
+                "sku": response.get("sku", platform_listing_id),
                 "status": response.get("status"),
                 "inventory": response.get("inventory"),
-                "price": Decimal(response.get("price", "0")),
-                "sales": response.get("sales_count", 0),
-                "views": response.get("view_count", 0),
+                "price": Decimal(str(price)) if price is not None else None,
+                "sales": sales,
+                "views": response.get("view_count"),
+                "clicks": response.get("click_count"),
+                "orders": orders if orders is not None else sales,
+                "units_sold": units_sold if units_sold is not None else sales,
             }
 
         except Exception as e:
@@ -486,6 +494,18 @@ class TemuAdapterMock(TemuAdapter):
         if method == "product.add":
             sku = f"TEMU-{uuid.uuid4().hex[:10].upper()}"
             product_id = str(uuid.uuid4().int)[:12]
+            self._listings[sku] = {
+                "sku": sku,
+                "product_id": product_id,
+                "status": "online",
+                "inventory": data.get("inventory"),
+                "price": data.get("price"),
+                "title": data.get("title"),
+                "description": data.get("description"),
+                "sales_count": 0,
+                "view_count": 0,
+                "click_count": 0,
+            }
             return {"sku": sku, "product_id": product_id}
 
         elif method == "image.upload":
@@ -498,6 +518,20 @@ class TemuAdapterMock(TemuAdapter):
             return {}
 
         elif method == "product.update":
+            sku = data.get("sku")
+            listing = self._listings.get(sku)
+            if not listing:
+                return {}
+
+            for source_key, target_key in {
+                "price": "price",
+                "inventory": "inventory",
+                "title": "title",
+                "description": "description",
+                "status": "status",
+            }.items():
+                if source_key in data:
+                    listing[target_key] = data[source_key]
             return {}
 
         return {}

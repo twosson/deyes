@@ -1,5 +1,6 @@
 """Celery application configuration."""
 from celery import Celery
+from celery.schedules import crontab
 
 from app.core.config import get_settings
 
@@ -9,7 +10,10 @@ celery_app = Celery(
     "deyes",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.workers.tasks_agent_pipeline"],
+    include=[
+        "app.workers.tasks_agent_pipeline",
+        "app.workers.tasks_platform_sync",
+    ],
 )
 
 celery_app.conf.update(
@@ -23,4 +27,18 @@ celery_app.conf.update(
     task_soft_time_limit=3300,  # 55 minutes
     worker_prefetch_multiplier=1,
     worker_max_tasks_per_child=100,
+    beat_schedule={
+        "sync-all-listings-status": {
+            "task": "tasks.sync_all_listings_status",
+            "schedule": crontab(minute="*/15"),
+        },
+        "sync-all-listings-inventory": {
+            "task": "tasks.sync_all_listings_inventory",
+            "schedule": crontab(minute="*/30"),
+        },
+        "sync-all-listings-metrics": {
+            "task": "tasks.sync_all_listings_metrics",
+            "schedule": crontab(minute=0, hour=0),
+        },
+    },
 )

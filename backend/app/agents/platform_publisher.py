@@ -17,14 +17,11 @@ from uuid import UUID, uuid4
 from sqlalchemy import select
 
 from app.agents.base.agent import AgentContext, AgentResult, BaseAgent
-from app.core.config import get_settings
 from app.core.enums import AssetType, PlatformListingStatus, ProductLifecycle, TargetPlatform
-from app.core.logging import get_logger
 from app.db.models import CandidateProduct, ContentAsset, ListingAssetAssociation, PlatformListing
 from app.services.listing_metrics_service import ListingMetricsService
 from app.services.platform_sync_service import PlatformSyncService
-from app.services.platforms.base import MockPlatformAdapter, PlatformAdapter
-from app.services.platforms.temu import get_temu_adapter
+from app.services.platforms import PlatformAdapter, get_platform_adapter
 
 
 class PlatformPublisherAgent(BaseAgent):
@@ -79,8 +76,6 @@ class PlatformPublisherAgent(BaseAgent):
 
     def __init__(self):
         super().__init__("platform_publisher")
-        self.settings = get_settings()
-        self._adapters: dict[str, PlatformAdapter] = {}
 
     async def execute(self, context: AgentContext) -> AgentResult:
         """Execute platform publishing.
@@ -284,26 +279,8 @@ class PlatformPublisherAgent(BaseAgent):
         return listing
 
     def _get_adapter(self, platform: str, region: str) -> PlatformAdapter:
-        """Get or create platform adapter."""
-        key = f"{platform}_{region}"
-
-        if key not in self._adapters:
-            if platform == "temu":
-                self._adapters[key] = get_temu_adapter(
-                    region=region,
-                    mock=self.settings.temu_use_mock,
-                )
-            elif platform == "amazon":
-                # TODO: Implement Amazon adapter
-                self._adapters[key] = MockPlatformAdapter(TargetPlatform.AMAZON)
-            elif platform == "ozon":
-                # TODO: Implement Ozon adapter
-                self._adapters[key] = MockPlatformAdapter(TargetPlatform.OZON)
-            else:
-                # Default to mock adapter
-                self._adapters[key] = MockPlatformAdapter(TargetPlatform(platform))
-
-        return self._adapters[key]
+        """Get platform adapter using shared resolution logic."""
+        return get_platform_adapter(platform, region)
 
     def _calculate_price(
         self,
@@ -503,12 +480,27 @@ class PlatformSyncAgent(BaseAgent):
 
             for listing in listings:
                 try:
-                    if sync_type in {"listing_metrics", "inventory", "price"}:
+                    if sync_type == "listing_metrics":
                         await self.sync_service.sync_listing_metrics(
                             context.db,
                             listing_id=listing.id,
                             start_date=start_date,
                             end_date=end_date,
+                        )
+                    elif sync_type == "inventory":
+                        await self.sync_service.sync_listing_inventory(
+                            context.db,
+                            listing_id=listing.id,
+                        )
+                    elif sync_type == "price":
+                        await self.sync_service.sync_listing_price(
+                            context.db,
+                            listing_id=listing.id,
+                        )
+                    elif sync_type == "status":
+                        await self.sync_service.sync_listing_status(
+                            context.db,
+                            listing_id=listing.id,
                         )
                     else:
                         raise ValueError(f"Unsupported sync_type: {sync_type}")

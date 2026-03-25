@@ -7,19 +7,39 @@ from uuid import uuid4
 from unittest.mock import AsyncMock
 
 import pytest
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.base.agent import AgentContext
 from app.agents.platform_publisher import PlatformSyncAgent
-from app.core.enums import CandidateStatus, PlatformListingStatus, SourcePlatform, TargetPlatform
-from app.db.models import CandidateProduct, PlatformListing
+from app.core.enums import (
+    CandidateStatus,
+    PlatformListingStatus,
+    SourcePlatform,
+    StrategyRunStatus,
+    TargetPlatform,
+    TriggerType,
+)
+from app.db.models import CandidateProduct, PlatformListing, StrategyRun
+
+
+async def _create_strategy_run(db_session: AsyncSession) -> StrategyRun:
+    strategy_run = StrategyRun(
+        id=uuid4(),
+        trigger_type=TriggerType.API,
+        source_platform=SourcePlatform.ALIBABA_1688,
+        status=StrategyRunStatus.COMPLETED,
+        max_candidates=5,
+    )
+    db_session.add(strategy_run)
+    await db_session.flush()
+    return strategy_run
 
 
 async def _create_candidate(db_session: AsyncSession) -> CandidateProduct:
+    strategy_run = await _create_strategy_run(db_session)
     candidate = CandidateProduct(
         id=uuid4(),
-        strategy_run_id=uuid4(),
+        strategy_run_id=strategy_run.id,
         source_platform=SourcePlatform.ALIBABA_1688,
         source_product_id=f"sync-{uuid4()}",
         title="Sync Test Product",
@@ -42,6 +62,7 @@ async def _create_listing(
         candidate_product_id=candidate_id,
         platform=TargetPlatform.TEMU,
         region=region,
+        platform_listing_id=f"TEMU-{uuid4().hex[:10].upper()}",
         price=Decimal("19.99"),
         currency="USD" if region == "us" else "GBP",
         inventory=10,
@@ -62,16 +83,17 @@ async def test_platform_sync_agent_syncs_active_listings(db_session: AsyncSessio
 
     agent = PlatformSyncAgent()
     agent.sync_service.sync_listing_metrics = AsyncMock(
-        return_value={"status": "stub_not_implemented", "synced_days": 0}
+        return_value={"status": "ok", "synced_days": 1}
     )
 
+    today = date.today()
     context = AgentContext(
         strategy_run_id=uuid4(),
         db=db_session,
         input_data={
             "sync_type": "listing_metrics",
-            "start_date": str(date.today()),
-            "end_date": str(date.today()),
+            "start_date": str(today),
+            "end_date": str(today),
         },
     )
 
@@ -80,7 +102,13 @@ async def test_platform_sync_agent_syncs_active_listings(db_session: AsyncSessio
     assert result.success is True
     assert result.output_data["synced_count"] == 2
     assert result.output_data["failed_count"] == 0
+    assert result.output_data["start_date"] == str(today)
+    assert result.output_data["end_date"] == str(today)
     assert agent.sync_service.sync_listing_metrics.await_count == 2
+
+    for awaited_call in agent.sync_service.sync_listing_metrics.await_args_list:
+        assert awaited_call.kwargs["start_date"] == today
+        assert awaited_call.kwargs["end_date"] == today
 
     await db_session.refresh(listing1)
     await db_session.refresh(listing2)
@@ -100,7 +128,7 @@ async def test_platform_sync_agent_filters_by_listing_ids(db_session: AsyncSessi
 
     agent = PlatformSyncAgent()
     agent.sync_service.sync_listing_metrics = AsyncMock(
-        return_value={"status": "stub_not_implemented", "synced_days": 0}
+        return_value={"status": "ok", "synced_days": 1}
     )
 
     context = AgentContext(
@@ -175,3 +203,78 @@ async def test_platform_sync_agent_rejects_invalid_date_range(db_session: AsyncS
 
     assert result.success is False
     assert "end_date cannot be earlier than start_date" in result.error_message
+
+
+@pytest.mark.asyncio
+async def test_platform_sync_agent_dispatches_status_sync(db_session: AsyncSession):
+    """PlatformSyncAgent should call sync_listing_status for status sync_type."""
+    candidate = await _create_candidate(db_session)
+    listing = await _create_listing(db_session, candidate_id=candidate.id, region="us")
+    await db_session.commit()
+
+    agent = PlatformSyncAgent()
+    agent.sync_service.sync_listing_status = AsyncMock(
+        return_value={"listing_id": str(listing.id), "status": "ok"}
+    )
+
+    context = AgentContext(
+        strategy_run_id=uuid4(),
+        db=db_session,
+        input_data={"sync_type": "status"},
+    )
+
+    result = await agent.execute(context)
+
+    assert result.success is True
+    assert result.output_data["synced_count"] == 1
+    assert agent.sync_service.sync_listing_status.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_platform_sync_agent_dispatches_inventory_sync(db_session: AsyncSession):
+    """PlatformSyncAgent should call sync_listing_inventory for inventory sync_type."""
+    candidate = await _create_candidate(db_session)
+    listing = await _create_listing(db_session, candidate_id=candidate.id, region="us")
+    await db_session.commit()
+
+    agent = PlatformSyncAgent()
+    agent.sync_service.sync_listing_inventory = AsyncMock(
+        return_value={"listing_id": str(listing.id), "status": "ok"}
+    )
+
+    context = AgentContext(
+        strategy_run_id=uuid4(),
+        db=db_session,
+        input_data={"sync_type": "inventory"},
+    )
+
+    result = await agent.execute(context)
+
+    assert result.success is True
+    assert result.output_data["synced_count"] == 1
+    assert agent.sync_service.sync_listing_inventory.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_platform_sync_agent_dispatches_price_sync(db_session: AsyncSession):
+    """PlatformSyncAgent should call sync_listing_price for price sync_type."""
+    candidate = await _create_candidate(db_session)
+    listing = await _create_listing(db_session, candidate_id=candidate.id, region="us")
+    await db_session.commit()
+
+    agent = PlatformSyncAgent()
+    agent.sync_service.sync_listing_price = AsyncMock(
+        return_value={"listing_id": str(listing.id), "status": "ok"}
+    )
+
+    context = AgentContext(
+        strategy_run_id=uuid4(),
+        db=db_session,
+        input_data={"sync_type": "price"},
+    )
+
+    result = await agent.execute(context)
+
+    assert result.success is True
+    assert result.output_data["synced_count"] == 1
+    assert agent.sync_service.sync_listing_price.await_count == 1

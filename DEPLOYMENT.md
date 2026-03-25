@@ -18,6 +18,7 @@
 - `comfyui-1`：图像生成服务
 - `backend`：FastAPI API
 - `worker`：Celery Worker
+- `beat`：Celery Beat 定时调度
 - `frontend`：Vue 运营中台
 
 这是当前**唯一受支持的完整部署路径**。

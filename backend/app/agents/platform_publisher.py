@@ -9,7 +9,7 @@ This agent is responsible for:
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
@@ -22,6 +22,7 @@ from app.core.enums import AssetType, PlatformListingStatus, ProductLifecycle, T
 from app.core.logging import get_logger
 from app.db.models import CandidateProduct, ContentAsset, ListingAssetAssociation, PlatformListing
 from app.services.listing_metrics_service import ListingMetricsService
+from app.services.platform_sync_service import PlatformSyncService
 from app.services.platforms.base import MockPlatformAdapter, PlatformAdapter
 from app.services.platforms.temu import get_temu_adapter
 
@@ -453,38 +454,43 @@ class PlatformPublisherAgent(BaseAgent):
 
 
 class PlatformSyncAgent(BaseAgent):
-    """Agent for syncing inventory/price to platforms.
-
-    This is a separate agent that runs periodically to sync data.
-    """
+    """Agent for syncing listing performance data via PlatformSyncService."""
 
     def __init__(self):
         super().__init__("platform_sync")
+        self.sync_service = PlatformSyncService()
 
     async def execute(self, context: AgentContext) -> AgentResult:
         """Execute platform sync.
 
         Input parameters:
-        - sync_type: "inventory" or "price"
+        - sync_type: "listing_metrics" (preferred), "inventory", or "price"
         - platform_listing_ids: Optional list of specific listings to sync
+        - start_date: Optional start date in ISO format (defaults to today)
+        - end_date: Optional end date in ISO format (defaults to today)
         """
         try:
-            sync_type = context.input_data.get("sync_type", "inventory")
+            sync_type = context.input_data.get("sync_type", "listing_metrics")
             listing_ids = context.input_data.get("platform_listing_ids")
+            start_date = self._parse_sync_date(context.input_data.get("start_date"))
+            end_date = self._parse_sync_date(context.input_data.get("end_date"))
+
+            if end_date < start_date:
+                raise ValueError("end_date cannot be earlier than start_date")
 
             self.logger.info(
                 "platform_sync_started",
                 sync_type=sync_type,
                 listing_count=len(listing_ids) if listing_ids else "all",
+                start_date=str(start_date),
+                end_date=str(end_date),
             )
 
-            # Get listings to sync
             if listing_ids:
                 query = select(PlatformListing).where(
                     PlatformListing.id.in_([UUID(lid) for lid in listing_ids])
                 )
             else:
-                # Sync all active listings
                 query = select(PlatformListing).where(
                     PlatformListing.status == PlatformListingStatus.ACTIVE
                 )
@@ -492,30 +498,31 @@ class PlatformSyncAgent(BaseAgent):
             result = await context.db.execute(query)
             listings = list(result.scalars().all())
 
-            # Sync each listing
             synced_count = 0
             failed_count = 0
 
             for listing in listings:
                 try:
-                    if sync_type == "inventory":
-                        success = await self._sync_inventory(listing)
-                    elif sync_type == "price":
-                        success = await self._sync_price(listing)
+                    if sync_type in {"listing_metrics", "inventory", "price"}:
+                        await self.sync_service.sync_listing_metrics(
+                            context.db,
+                            listing_id=listing.id,
+                            start_date=start_date,
+                            end_date=end_date,
+                        )
                     else:
-                        continue
+                        raise ValueError(f"Unsupported sync_type: {sync_type}")
 
-                    if success:
-                        synced_count += 1
-                    else:
-                        failed_count += 1
-
+                    listing.last_synced_at = datetime.now(UTC)
+                    listing.sync_error = None
+                    synced_count += 1
                 except Exception as e:
                     self.logger.error(
                         "listing_sync_failed",
                         listing_id=str(listing.id),
                         error=str(e),
                     )
+                    listing.sync_error = str(e)
                     failed_count += 1
 
             await context.db.commit()
@@ -528,30 +535,22 @@ class PlatformSyncAgent(BaseAgent):
             )
 
             return AgentResult(
-                success=True,
+                success=failed_count == 0,
                 output_data={
                     "sync_type": sync_type,
                     "synced_count": synced_count,
                     "failed_count": failed_count,
+                    "start_date": str(start_date),
+                    "end_date": str(end_date),
                 },
             )
 
         except Exception as e:
             self.logger.error("platform_sync_error", error=str(e))
-            return AgentResult(success=False, error_message=str(e))
+            return AgentResult(success=False, output_data={}, error_message=str(e))
 
-    async def _sync_inventory(self, listing: PlatformListing) -> bool:
-        """Sync inventory for a listing."""
-        # TODO: Implement inventory sync logic
-        # 1. Query 1688 for current stock
-        # 2. Calculate allocation for this platform
-        # 3. Call platform API to update
-        return True
-
-    async def _sync_price(self, listing: PlatformListing) -> bool:
-        """Sync price for a listing."""
-        # TODO: Implement price sync logic
-        # 1. Check exchange rate
-        # 2. Check supplier price changes
-        # 3. Recalculate and update if needed
-        return True
+    def _parse_sync_date(self, value: str | None) -> date:
+        """Parse an ISO date string, defaulting to today when absent."""
+        if not value:
+            return date.today()
+        return date.fromisoformat(value)

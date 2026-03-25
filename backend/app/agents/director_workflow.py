@@ -5,14 +5,14 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agents.base.agent import AgentContext
+from app.agents.base.agent_step_runner import AgentStepRunner
 from app.agents.multilingual_copywriter import MultilingualCopywriterAgent
 from app.agents.pricing_analyst import PricingAnalystAgent
 from app.agents.product_selector import ProductSelectorAgent
 from app.agents.risk_controller import RiskControllerAgent
-from app.core.enums import AgentRunStatus, StrategyRunStatus
+from app.core.enums import StrategyRunStatus
 from app.core.logging import get_logger
-from app.db.models import AgentRun, RunEvent, StrategyRun
+from app.db.models import StrategyRun
 
 logger = get_logger(__name__)
 
@@ -25,6 +25,7 @@ class DirectorWorkflow:
         self.pricing_analyst = PricingAnalystAgent()
         self.risk_controller = RiskControllerAgent()
         self.copywriter = MultilingualCopywriterAgent()
+        self.step_runner = AgentStepRunner()
 
     async def execute_pipeline(
         self,
@@ -157,85 +158,10 @@ class DirectorWorkflow:
         input_data: dict,
     ) -> dict:
         """Execute a single agent step."""
-        from uuid import uuid4
-
-        agent_run_id = uuid4()
-        started_at = datetime.now(timezone.utc)
-
-        # Create agent run record
-        agent_run = AgentRun(
-            id=agent_run_id,
-            strategy_run_id=strategy_run.id,
+        return await self.step_runner.execute_step(
+            agent=agent,
             step_name=step_name,
-            agent_name=agent.name,
-            status=AgentRunStatus.RUNNING,
+            strategy_run=strategy_run,
+            db=db,
             input_data=input_data,
-            started_at=started_at,
         )
-        db.add(agent_run)
-
-        # Create event
-        event = RunEvent(
-            id=uuid4(),
-            strategy_run_id=strategy_run.id,
-            agent_run_id=agent_run_id,
-            event_type=f"agent.{step_name}.started",
-            event_payload={"agent": agent.name},
-        )
-        db.add(event)
-        await db.commit()
-
-        try:
-            # Execute agent
-            context = AgentContext(
-                strategy_run_id=strategy_run.id,
-                db=db,
-                input_data=input_data,
-            )
-            result = await agent.execute(context)
-
-            # Update agent run
-            completed_at = datetime.now(timezone.utc)
-            agent_run.status = (
-                AgentRunStatus.COMPLETED if result.success else AgentRunStatus.FAILED
-            )
-            agent_run.output_data = result.output_data
-            agent_run.error_message = result.error_message
-            agent_run.completed_at = completed_at
-            agent_run.latency_ms = int((completed_at - started_at).total_seconds() * 1000)
-
-            # Create completion event
-            completion_event = RunEvent(
-                id=uuid4(),
-                strategy_run_id=strategy_run.id,
-                agent_run_id=agent_run_id,
-                event_type=f"agent.{step_name}.completed",
-                event_payload={
-                    "agent": agent.name,
-                    "success": result.success,
-                    "latency_ms": agent_run.latency_ms,
-                },
-            )
-            db.add(completion_event)
-            await db.commit()
-
-            return {
-                "success": result.success,
-                "output_data": result.output_data,
-                "error_message": result.error_message,
-            }
-
-        except Exception as e:
-            logger.error(
-                "agent_step_failed",
-                step_name=step_name,
-                agent=agent.name,
-                error=str(e),
-            )
-            # Rollback first to clear any pending transaction state
-            await db.rollback()
-            agent_run.status = AgentRunStatus.FAILED
-            agent_run.error_message = str(e)
-            agent_run.completed_at = datetime.now(timezone.utc)
-            await db.commit()
-            raise

@@ -18,7 +18,13 @@ from app.core.enums import (
     TargetPlatform,
     TriggerType,
 )
-from app.db.models import CandidateProduct, ContentAsset, PlatformListing, StrategyRun
+from app.db.models import (
+    CandidateProduct,
+    ContentAsset,
+    ListingAssetAssociation,
+    PlatformListing,
+    StrategyRun,
+)
 from app.services.asset_performance_service import AssetPerformanceService
 from app.services.experiment_service import ExperimentService
 
@@ -440,3 +446,136 @@ async def test_set_winner_marks_experiment_completed(db_session: AsyncSession):
     assert updated.status == ExperimentStatus.COMPLETED
     assert updated.winner_variant_group == "control"
     assert updated.winner_selected_at is not None
+
+
+@pytest.mark.asyncio
+async def test_promote_winner_updates_main_flag(db_session: AsyncSession):
+    """ExperimentService should update is_main for winner assets."""
+    candidate = await _create_candidate(db_session, suffix="010")
+    control_asset = await _create_asset(
+        db_session, candidate_id=candidate.id, variant_group="control", suffix="promote-control"
+    )
+    challenger_asset = await _create_asset(
+        db_session, candidate_id=candidate.id, variant_group="challenger", suffix="promote-challenger"
+    )
+    listing = await _create_listing(db_session, candidate_id=candidate.id, region="us")
+
+    # Create associations: control is main initially
+    control_assoc = ListingAssetAssociation(
+        listing_id=listing.id,
+        asset_id=control_asset.id,
+        display_order=0,
+        is_main=True,
+    )
+    challenger_assoc = ListingAssetAssociation(
+        listing_id=listing.id,
+        asset_id=challenger_asset.id,
+        display_order=1,
+        is_main=False,
+    )
+    db_session.add(control_assoc)
+    db_session.add(challenger_assoc)
+    await db_session.flush()
+
+    service = ExperimentService()
+    experiment = await service.create_experiment(
+        db_session,
+        candidate_product_id=candidate.id,
+        name="Promotion test",
+    )
+    await service.set_winner(
+        db_session,
+        experiment_id=experiment.id,
+        winner_variant_group="challenger",
+    )
+
+    result = await service.promote_winner(db_session, experiment_id=experiment.id)
+
+    assert result["winner_variant_group"] == "challenger"
+    assert str(listing.id) in result["promoted_listing_ids"]
+    assert result["updated_association_count"] == 2
+
+    # Verify associations
+    await db_session.refresh(control_assoc)
+    await db_session.refresh(challenger_assoc)
+    assert control_assoc.is_main is False
+    assert challenger_assoc.is_main is True
+
+
+@pytest.mark.asyncio
+async def test_promote_winner_skips_listings_without_winner_assets(db_session: AsyncSession):
+    """ExperimentService should skip listings that lack winner variant assets."""
+    candidate = await _create_candidate(db_session, suffix="011")
+    control_asset = await _create_asset(
+        db_session, candidate_id=candidate.id, variant_group="control", suffix="skip-control"
+    )
+    challenger_asset = await _create_asset(
+        db_session, candidate_id=candidate.id, variant_group="challenger", suffix="skip-challenger"
+    )
+    listing_with_winner = await _create_listing(db_session, candidate_id=candidate.id, region="us")
+    listing_without_winner = await _create_listing(db_session, candidate_id=candidate.id, region="uk")
+
+    # listing_with_winner has both assets
+    db_session.add(
+        ListingAssetAssociation(
+            listing_id=listing_with_winner.id,
+            asset_id=control_asset.id,
+            display_order=0,
+            is_main=True,
+        )
+    )
+    db_session.add(
+        ListingAssetAssociation(
+            listing_id=listing_with_winner.id,
+            asset_id=challenger_asset.id,
+            display_order=1,
+            is_main=False,
+        )
+    )
+
+    # listing_without_winner only has control
+    db_session.add(
+        ListingAssetAssociation(
+            listing_id=listing_without_winner.id,
+            asset_id=control_asset.id,
+            display_order=0,
+            is_main=True,
+        )
+    )
+    await db_session.flush()
+
+    service = ExperimentService()
+    experiment = await service.create_experiment(
+        db_session,
+        candidate_product_id=candidate.id,
+        name="Skip test",
+    )
+    await service.set_winner(
+        db_session,
+        experiment_id=experiment.id,
+        winner_variant_group="challenger",
+    )
+
+    result = await service.promote_winner(db_session, experiment_id=experiment.id)
+
+    assert str(listing_with_winner.id) in result["promoted_listing_ids"]
+    assert str(listing_without_winner.id) in result["skipped_listing_ids"]
+
+
+@pytest.mark.asyncio
+async def test_promote_winner_rejects_experiment_without_winner(db_session: AsyncSession):
+    """ExperimentService should reject promotion when no winner is selected."""
+    candidate = await _create_candidate(db_session, suffix="012")
+    await _create_asset(db_session, candidate_id=candidate.id, variant_group="control", suffix="no-winner-a")
+    await _create_asset(db_session, candidate_id=candidate.id, variant_group="challenger", suffix="no-winner-b")
+
+    service = ExperimentService()
+    experiment = await service.create_experiment(
+        db_session,
+        candidate_product_id=candidate.id,
+        name="No winner test",
+    )
+
+    with pytest.raises(ValueError, match="has no winner selected"):
+        await service.promote_winner(db_session, experiment_id=experiment.id)
+

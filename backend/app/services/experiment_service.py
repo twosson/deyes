@@ -10,7 +10,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.enums import ExperimentStatus, TargetPlatform
 from app.core.logging import get_logger
-from app.db.models import AssetPerformanceDaily, ContentAsset, Experiment, PlatformListing
+from app.db.models import (
+    AssetPerformanceDaily,
+    ContentAsset,
+    Experiment,
+    ListingAssetAssociation,
+    PlatformListing,
+)
 
 
 class ExperimentService:
@@ -252,6 +258,123 @@ class ExperimentService:
             winner_variant_group=winner_variant_group,
         )
         return experiment
+
+    async def promote_winner(
+        self,
+        db: AsyncSession,
+        *,
+        experiment_id: UUID,
+        listing_ids: list[UUID] | None = None,
+    ) -> dict:
+        """Promote the winning variant to main image for target listings.
+
+        Updates ListingAssetAssociation.is_main to reflect the experiment winner.
+        Only updates listings that have assets from the winner variant group.
+
+        Args:
+            db: Database session
+            experiment_id: Experiment ID
+            listing_ids: Optional list of specific listing IDs to promote.
+                        If None, promotes to all listings matching experiment filters.
+
+        Returns:
+            dict with:
+                - winner_variant_group: The winning variant group
+                - promoted_listing_ids: List of listing IDs where promotion succeeded
+                - skipped_listing_ids: List of listing IDs without winner assets
+                - updated_association_count: Total associations updated
+
+        Raises:
+            ValueError: If experiment has no winner selected
+        """
+        experiment = await self._get_experiment_or_raise(db, experiment_id)
+
+        if not experiment.winner_variant_group:
+            raise ValueError(f"Experiment {experiment_id} has no winner selected")
+
+        winner_variant_group = experiment.winner_variant_group
+
+        # Build query for target listings
+        stmt = select(PlatformListing).where(
+            PlatformListing.candidate_product_id == experiment.candidate_product_id
+        )
+
+        if experiment.target_platform is not None:
+            stmt = stmt.where(PlatformListing.platform == experiment.target_platform)
+        if experiment.region is not None:
+            stmt = stmt.where(PlatformListing.region == experiment.region)
+        if listing_ids is not None:
+            stmt = stmt.where(PlatformListing.id.in_(listing_ids))
+
+        result = await db.execute(stmt)
+        listings = list(result.scalars().all())
+
+        promoted_listing_ids = []
+        skipped_listing_ids = []
+        updated_association_count = 0
+
+        for listing in listings:
+            # Find all associations for this listing
+            assoc_stmt = (
+                select(ListingAssetAssociation, ContentAsset)
+                .join(ContentAsset, ContentAsset.id == ListingAssetAssociation.asset_id)
+                .where(ListingAssetAssociation.listing_id == listing.id)
+                .order_by(
+                    ListingAssetAssociation.display_order.asc(),
+                    ListingAssetAssociation.asset_id.asc(),
+                )
+            )
+            assoc_result = await db.execute(assoc_stmt)
+            associations = list(assoc_result.all())
+
+            if not associations:
+                skipped_listing_ids.append(listing.id)
+                continue
+
+            # Find winner asset association
+            winner_assoc = None
+            for assoc, asset in associations:
+                if asset.variant_group == winner_variant_group:
+                    winner_assoc = assoc
+                    break
+
+            if winner_assoc is None:
+                # No winner asset in this listing
+                skipped_listing_ids.append(listing.id)
+                continue
+
+            changed_association_keys: set[tuple[UUID, UUID]] = set()
+
+            # Update all associations: set is_main=False, then set winner to True
+            for assoc, _ in associations:
+                if assoc.is_main:
+                    assoc.is_main = False
+                    changed_association_keys.add((assoc.listing_id, assoc.asset_id))
+
+            if not winner_assoc.is_main:
+                winner_assoc.is_main = True
+                changed_association_keys.add((winner_assoc.listing_id, winner_assoc.asset_id))
+
+            updated_association_count += len(changed_association_keys)
+            promoted_listing_ids.append(listing.id)
+
+        await db.flush()
+
+        self.logger.info(
+            "experiment_winner_promoted",
+            experiment_id=str(experiment_id),
+            winner_variant_group=winner_variant_group,
+            promoted_count=len(promoted_listing_ids),
+            skipped_count=len(skipped_listing_ids),
+            updated_associations=updated_association_count,
+        )
+
+        return {
+            "winner_variant_group": winner_variant_group,
+            "promoted_listing_ids": [str(lid) for lid in promoted_listing_ids],
+            "skipped_listing_ids": [str(lid) for lid in skipped_listing_ids],
+            "updated_association_count": updated_association_count,
+        }
 
     async def _get_experiment_or_raise(self, db: AsyncSession, experiment_id: UUID) -> Experiment:
         experiment = await db.get(Experiment, experiment_id)

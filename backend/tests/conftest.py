@@ -1,6 +1,6 @@
 """Test fixtures and configuration."""
 import pytest_asyncio
-from sqlalchemy import ARRAY as SA_ARRAY
+from sqlalchemy import ARRAY as SA_ARRAY, JSON
 from sqlalchemy.dialects.postgresql import ARRAY as PG_ARRAY, UUID as PGUUID
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.ext.compiler import compiles
@@ -21,9 +21,18 @@ def compile_array_sqlite(_type, _compiler, **_kw):
     return "JSON"
 
 
+def _adapt_array_columns_for_sqlite() -> None:
+    """Replace ARRAY column types with JSON so SQLite can bind Python lists."""
+    for table in Base.metadata.tables.values():
+        for column in table.columns:
+            if isinstance(column.type, (SA_ARRAY, PG_ARRAY)):
+                column.type = JSON()
+
+
 @pytest_asyncio.fixture
 async def db_session():
     """Create a test database session."""
+    _adapt_array_columns_for_sqlite()
     engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
 
     async with engine.begin() as conn:

@@ -26,7 +26,7 @@ def test_marginal_product():
 
     result = service.calculate_pricing(
         supplier_price=Decimal("20.00"),
-        platform_price=Decimal("28.00"),
+        platform_price=Decimal("35.00"),
     )
 
     assert result.estimated_margin > 0

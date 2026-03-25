@@ -11,6 +11,7 @@ from decimal import Decimal
 from uuid import uuid4
 
 import pytest
+import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -267,9 +268,9 @@ class StubAlibaba1688AdapterWith7Suppliers(SourceAdapter):
                         "supplier_name": f"供应商 {i}",
                         "supplier_url": f"https://shop.example.com/supplier-{i}",
                         "supplier_sku": f"sku-{i:04d}",
-                        "supplier_price": Decimal("2.00") + Decimal(i * 0.1),
+                        "supplier_price": Decimal("2.00") + (Decimal(i) * Decimal("0.10")),
                         "moq": 10 + i * 5,
-                        "confidence_score": Decimal("0.90") - Decimal(i * 0.02),
+                        "confidence_score": Decimal("0.90") - (Decimal(i - 1) * Decimal("0.02")),
                         "raw_payload": {
                             "source_platform": "alibaba_1688",
                             "supplier_index": i,
@@ -331,7 +332,7 @@ async def test_product_selector_caps_supplier_matches_at_5(db_session: AsyncSess
         assert supplier.raw_payload["source_platform"] == "alibaba_1688"
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def sample_candidate_product(db_session: AsyncSession) -> CandidateProduct:
     """Create a sample candidate product."""
     candidate = CandidateProduct(
@@ -362,8 +363,11 @@ async def sample_candidate_product(db_session: AsyncSession) -> CandidateProduct
     return candidate
 
 
-@pytest.fixture
-def sample_content_assets(db_session: AsyncSession, sample_candidate_product: CandidateProduct):
+@pytest_asyncio.fixture
+async def sample_content_assets(
+    db_session: AsyncSession,
+    sample_candidate_product: CandidateProduct,
+):
     """Create sample content assets."""
     assets = []
 
@@ -408,6 +412,7 @@ def sample_content_assets(db_session: AsyncSession, sample_candidate_product: Ca
     for asset in assets:
         db_session.add(asset)
 
+    await db_session.commit()
     return assets
 
 
@@ -459,7 +464,7 @@ async def test_content_asset_manager_mock(db_session: AsyncSession, sample_candi
     # Check database
     await db_session.commit()
     assets = await db_session.execute(
-        db_session.query(ContentAsset).filter_by(candidate_product_id=sample_candidate_product.id)
+        select(ContentAsset).where(ContentAsset.candidate_product_id == sample_candidate_product.id)
     )
     assets_list = list(assets.scalars().all())
     assert len(assets_list) == 1
@@ -509,7 +514,7 @@ async def test_platform_publisher_temu_mock(
     # Check database
     await db_session.commit()
     listings = await db_session.execute(
-        db_session.query(PlatformListing).filter_by(candidate_product_id=sample_candidate_product.id)
+        select(PlatformListing).where(PlatformListing.candidate_product_id == sample_candidate_product.id)
     )
     listings_list = list(listings.scalars().all())
     assert len(listings_list) == 1
@@ -582,7 +587,7 @@ async def test_complete_flow_mock(db_session: AsyncSession):
     # Approve assets
     await db_session.commit()
     assets = await db_session.execute(
-        db_session.query(ContentAsset).filter_by(candidate_product_id=candidate.id)
+        select(ContentAsset).where(ContentAsset.candidate_product_id == candidate.id)
     )
     for asset in assets.scalars().all():
         asset.human_approved = True
@@ -618,7 +623,7 @@ async def test_complete_flow_mock(db_session: AsyncSession):
 
     # Check listings
     listings = await db_session.execute(
-        db_session.query(PlatformListing).filter_by(candidate_product_id=candidate.id)
+        select(PlatformListing).where(PlatformListing.candidate_product_id == candidate.id)
     )
     listings_list = list(listings.scalars().all())
     assert len(listings_list) == 2

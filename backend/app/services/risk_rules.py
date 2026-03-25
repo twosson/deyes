@@ -135,7 +135,7 @@ class RiskAssessmentResult:
         """Finalize decision based on score."""
         if self.score >= 70:
             self.decision = RiskDecision.REJECT
-        elif self.score >= 40:
+        elif self.score >= 30:
             self.decision = RiskDecision.REVIEW
         else:
             self.decision = RiskDecision.PASS

@@ -9,6 +9,7 @@ This agent is responsible for:
 """
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
@@ -20,6 +21,7 @@ from app.core.config import get_settings
 from app.core.enums import AssetType, PlatformListingStatus, ProductLifecycle, TargetPlatform
 from app.core.logging import get_logger
 from app.db.models import CandidateProduct, ContentAsset, ListingAssetAssociation, PlatformListing
+from app.services.listing_metrics_service import ListingMetricsService
 from app.services.platforms.base import MockPlatformAdapter, PlatformAdapter
 from app.services.platforms.temu import get_temu_adapter
 
@@ -267,6 +269,8 @@ class PlatformPublisherAgent(BaseAgent):
 
         await context.db.flush()
 
+        await self._initialize_listing_metrics(context=context, listing=listing)
+
         self.logger.info(
             "platform_listing_created",
             listing_id=str(listing.id),
@@ -407,6 +411,32 @@ class PlatformPublisherAgent(BaseAgent):
                 filtered.append(asset)
 
         return filtered
+
+    async def _initialize_listing_metrics(
+        self,
+        *,
+        context: AgentContext,
+        listing: PlatformListing,
+    ) -> None:
+        """Initialize a zeroed daily metrics row for a newly created listing."""
+        try:
+            service = ListingMetricsService()
+            await service.record_daily_metrics(
+                context.db,
+                listing_id=listing.id,
+                metric_date=date.today(),
+                impressions=0,
+                clicks=0,
+                orders=0,
+                units_sold=0,
+                revenue=Decimal("0.00"),
+            )
+        except Exception as exc:
+            self.logger.warning(
+                "listing_metrics_initialization_failed",
+                listing_id=str(listing.id),
+                error=str(exc),
+            )
 
     async def _handle_error(self, error: Exception, context: AgentContext) -> AgentResult:
         """Handle errors during publishing."""

@@ -27,7 +27,7 @@ from app.core.enums import (
     StrategyRunStatus,
     TriggerType,
 )
-from app.db.models import CandidateProduct, ContentAsset, PlatformListing, StrategyRun, SupplierMatch
+from app.db.models import CandidateProduct, ContentAsset, ListingPerformanceDaily, PlatformListing, StrategyRun, SupplierMatch
 from app.services.source_adapter import ProductData, SourceAdapter
 
 
@@ -470,6 +470,7 @@ async def test_content_asset_manager_mock(db_session: AsyncSession, sample_candi
     assert len(assets_list) == 1
     assert assets_list[0].asset_type == AssetType.MAIN_IMAGE
     assert "minimalist" in assets_list[0].style_tags
+    assert assets_list[0].variant_group is None
 
 
 @pytest.mark.asyncio
@@ -527,6 +528,17 @@ async def test_platform_publisher_temu_mock(
     assert listing.currency == "USD"
     assert listing.inventory > 0
     assert listing.platform_listing_id.startswith("TEMU-")
+
+    metrics = await db_session.execute(
+        select(ListingPerformanceDaily).where(ListingPerformanceDaily.listing_id == listing.id)
+    )
+    metrics_list = list(metrics.scalars().all())
+    assert len(metrics_list) == 1
+    assert metrics_list[0].impressions == 0
+    assert metrics_list[0].clicks == 0
+    assert metrics_list[0].orders == 0
+    assert metrics_list[0].units_sold == 0
+    assert metrics_list[0].revenue == Decimal("0.00")
 
 
 @pytest.mark.asyncio
@@ -639,6 +651,18 @@ async def test_complete_flow_mock(db_session: AsyncSession):
     assert uk_listing.platform.value == "temu"
     assert uk_listing.currency == "GBP"
     assert uk_listing.status == PlatformListingStatus.ACTIVE
+
+    metrics = await db_session.execute(
+        select(ListingPerformanceDaily).where(
+            ListingPerformanceDaily.listing_id.in_([listing.id for listing in listings_list])
+        )
+    )
+    metrics_list = list(metrics.scalars().all())
+    assert len(metrics_list) == 2
+    assert all(metric.impressions == 0 for metric in metrics_list)
+    assert all(metric.clicks == 0 for metric in metrics_list)
+    assert all(metric.orders == 0 for metric in metrics_list)
+    assert all(metric.units_sold == 0 for metric in metrics_list)
 
 
 @pytest.mark.asyncio

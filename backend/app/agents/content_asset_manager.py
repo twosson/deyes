@@ -72,6 +72,7 @@ class ContentAssetManagerAgent(BaseAgent):
             generate_count = context.input_data.get("generate_count", 1)
             platforms = context.input_data.get("platforms", [])
             regions = context.input_data.get("regions", [])
+            variant_group = context.input_data.get("variant_group")
 
             self.logger.info(
                 "content_generation_started",
@@ -110,6 +111,7 @@ class ContentAssetManagerAgent(BaseAgent):
                                 reference_images=reference_images,
                                 platforms=platforms,
                                 regions=regions,
+                                variant_group=variant_group,
                                 index=i + 1,
                             )
                             if asset:
@@ -161,6 +163,7 @@ class ContentAssetManagerAgent(BaseAgent):
         reference_images: list[str] | None,
         platforms: list[str],
         regions: list[str],
+        variant_group: str | None,
         index: int,
     ) -> ContentAsset | None:
         """Generate a single content asset."""
@@ -205,6 +208,7 @@ class ContentAssetManagerAgent(BaseAgent):
             style_tags=[style],
             platform_tags=platforms,
             region_tags=regions,
+            variant_group=variant_group,
             file_url=file_url,
             file_size=len(image_data),
             dimensions="1024x1024",

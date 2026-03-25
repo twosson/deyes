@@ -1,10 +1,22 @@
 """Database models."""
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import ARRAY, DECIMAL, JSON, DateTime, Enum as SAEnum, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    ARRAY,
+    DECIMAL,
+    JSON,
+    Date,
+    DateTime,
+    Enum as SAEnum,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+)
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -281,6 +293,7 @@ class ContentAsset(Base, UpdateTimestampMixin):
     style_tags: Mapped[Optional[list[str]]] = mapped_column(ARRAY(String(50)))  # ["minimalist", "luxury", "cute"]
     platform_tags: Mapped[Optional[list[str]]] = mapped_column(ARRAY(String(50)))  # ["temu", "amazon", "ozon"]
     region_tags: Mapped[Optional[list[str]]] = mapped_column(ARRAY(String(10)))  # ["us", "eu", "ru"]
+    variant_group: Mapped[Optional[str]] = mapped_column(String(100), index=True)
 
     # 文件信息
     file_url: Mapped[str] = mapped_column(Text, nullable=False)  # MinIO URL
@@ -316,6 +329,9 @@ class ContentAsset(Base, UpdateTimestampMixin):
     )
     platform_listings: Mapped[list["PlatformListing"]] = relationship(
         secondary="listing_asset_associations", back_populates="assets"
+    )
+    performance_daily: Mapped[list["AssetPerformanceDaily"]] = relationship(
+        back_populates="asset", passive_deletes=True
     )
 
 
@@ -374,6 +390,79 @@ class PlatformListing(Base, UpdateTimestampMixin):
     )
     inventory_logs: Mapped[list["InventorySyncLog"]] = relationship(back_populates="listing")
     price_history: Mapped[list["PriceHistory"]] = relationship(back_populates="listing")
+    performance_daily: Mapped[list["ListingPerformanceDaily"]] = relationship(
+        back_populates="listing", cascade="all, delete-orphan", passive_deletes=True
+    )
+    asset_performance_daily: Mapped[list["AssetPerformanceDaily"]] = relationship(
+        back_populates="listing", passive_deletes=True
+    )
+
+
+class ListingPerformanceDaily(Base, UpdateTimestampMixin):
+    """Daily performance facts for a platform listing."""
+
+    __tablename__ = "listing_performance_daily"
+    __table_args__ = (
+        Index(
+            "uq_listing_performance_daily_listing_date",
+            "listing_id",
+            "metric_date",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    listing_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("platform_listings.id"), nullable=False, index=True
+    )
+    metric_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    impressions: Mapped[int] = mapped_column(Integer, default=0)
+    clicks: Mapped[int] = mapped_column(Integer, default=0)
+    orders: Mapped[int] = mapped_column(Integer, default=0)
+    units_sold: Mapped[int] = mapped_column(Integer, default=0)
+    revenue: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(12, 2))
+    ad_spend: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(12, 2))
+    returns_count: Mapped[int] = mapped_column(Integer, default=0)
+    refund_amount: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(12, 2))
+    raw_payload: Mapped[Optional[dict]] = mapped_column(JSON)
+
+    # Relationships
+    listing: Mapped["PlatformListing"] = relationship(back_populates="performance_daily")
+
+
+class AssetPerformanceDaily(Base, UpdateTimestampMixin):
+    """Daily performance facts for a content asset within a listing context."""
+
+    __tablename__ = "asset_performance_daily"
+    __table_args__ = (
+        Index(
+            "uq_asset_performance_daily_asset_listing_date",
+            "asset_id",
+            "listing_id",
+            "metric_date",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    asset_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("content_assets.id"), nullable=False, index=True
+    )
+    listing_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("platform_listings.id"), nullable=False, index=True
+    )
+    metric_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    impressions: Mapped[int] = mapped_column(Integer, default=0)
+    clicks: Mapped[int] = mapped_column(Integer, default=0)
+    orders: Mapped[int] = mapped_column(Integer, default=0)
+    units_sold: Mapped[int] = mapped_column(Integer, default=0)
+    revenue: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(12, 2))
+    usage_count: Mapped[int] = mapped_column(Integer, default=0)
+    raw_payload: Mapped[Optional[dict]] = mapped_column(JSON)
+
+    # Relationships
+    asset: Mapped["ContentAsset"] = relationship(back_populates="performance_daily")
+    listing: Mapped["PlatformListing"] = relationship(back_populates="asset_performance_daily")
 
 
 class ListingAssetAssociation(Base):

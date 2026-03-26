@@ -13,6 +13,7 @@ from app.api import (
     routes_performance,
     routes_platform_listings,
     routes_products,
+    routes_recommendations,
 )
 from app.core.config import get_settings
 from app.core.logging import configure_logging, get_logger
@@ -59,6 +60,9 @@ app.include_router(routes_platform_listings.router, prefix=settings.api_prefix, 
 # Stage 1 Batch 3: Experiments and Performance
 app.include_router(routes_experiments.router, prefix=settings.api_prefix, tags=["experiments"])
 app.include_router(routes_performance.router, prefix=settings.api_prefix, tags=["performance"])
+
+# Recommendations
+app.include_router(routes_recommendations.router, prefix=settings.api_prefix, tags=["recommendations"])
 
 
 @app.get("/")

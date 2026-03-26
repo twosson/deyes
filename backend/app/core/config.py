@@ -110,6 +110,28 @@ class Settings(BaseSettings):
     temu_app_secret: str = ""
     temu_use_mock: bool = True  # Use mock adapter in development
 
+    # Demand Validation (Phase 1 Enhancement)
+    enable_demand_validation: bool = True
+    demand_validation_min_search_volume: int = 500
+    demand_validation_use_helium10: bool = False
+    demand_validation_helium10_api_key: str = ""
+    demand_validation_cache_ttl_seconds: int = 86400  # 24 hours
+
+    # Keyword Generation (Phase 3 Enhancement)
+    enable_keyword_generation: bool = True
+    keyword_generation_categories: list[str] = Field(
+        default_factory=lambda: ["electronics", "fashion", "home", "beauty", "sports"]
+    )
+    keyword_generation_region: str = "US"
+    keyword_generation_limit_per_category: int = 50
+    keyword_generation_min_trend_score: int = 20
+    keyword_generation_cache_ttl_seconds: int = 86400  # 24 hours
+    keyword_generation_auto_trigger_selection: bool = False  # Auto-trigger product selection
+
+    # Seasonal Calendar (Phase 4 Enhancement)
+    enable_seasonal_boost: bool = True
+    seasonal_calendar_lookahead_days: int = 90
+
 @lru_cache
 def get_settings() -> Settings:
     """Get cached settings instance."""

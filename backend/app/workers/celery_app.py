@@ -13,6 +13,7 @@ celery_app = Celery(
     include=[
         "app.workers.tasks_agent_pipeline",
         "app.workers.tasks_platform_sync",
+        "app.workers.tasks_keyword_research",
     ],
 )
 
@@ -39,6 +40,10 @@ celery_app.conf.update(
         "sync-all-listings-metrics": {
             "task": "tasks.sync_all_listings_metrics",
             "schedule": crontab(minute=0, hour=0),
+        },
+        "generate-trending-keywords": {
+            "task": "tasks.generate_trending_keywords",
+            "schedule": crontab(minute=0, hour=23),  # Run at 23:00 UTC daily
         },
     },
 )

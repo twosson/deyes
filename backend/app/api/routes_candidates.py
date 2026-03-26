@@ -1,8 +1,8 @@
 """Candidate product API routes."""
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import Float, cast, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -13,34 +13,78 @@ router = APIRouter()
 
 
 @router.get("/candidates")
-async def list_candidates(db: AsyncSession = Depends(get_db)):
-    """List candidate products."""
-    result = await db.execute(
-        select(CandidateProduct)
-        .options(
-            selectinload(CandidateProduct.pricing_assessment),
-            selectinload(CandidateProduct.risk_assessment),
-            selectinload(CandidateProduct.listing_drafts),
-        )
-        .order_by(CandidateProduct.created_at.desc())
+async def list_candidates(
+    sort_by: str = Query("priority", description="Sort by: priority, created_at, margin"),
+    db: AsyncSession = Depends(get_db),
+):
+    """List candidate products.
+
+    Args:
+        sort_by: Sort order
+            - priority: Sort by priority_score (highest first)
+            - created_at: Sort by creation time (newest first)
+            - margin: Sort by margin_percentage (highest first)
+    """
+    query = select(CandidateProduct).options(
+        selectinload(CandidateProduct.pricing_assessment),
+        selectinload(CandidateProduct.risk_assessment),
+        selectinload(CandidateProduct.listing_drafts),
     )
+
+    # Apply sorting
+    if sort_by == "priority":
+        # Sort by priority_score from normalized_attributes (highest first)
+        # Use SQLAlchemy's cross-database JSON accessor for compatibility
+        query = query.order_by(
+            cast(
+                CandidateProduct.normalized_attributes["priority_score"].as_float(),
+                Float,
+            )
+            .desc()
+            .nullslast(),
+            CandidateProduct.created_at.desc(),
+        )
+    elif sort_by == "margin":
+        # Sort by margin_percentage (highest first)
+        # This requires joining with pricing_assessment
+        from app.db.models import PricingAssessment
+
+        query = (
+            query.outerjoin(PricingAssessment)
+            .order_by(PricingAssessment.margin_percentage.desc().nullslast())
+        )
+    else:  # created_at (default)
+        query = query.order_by(CandidateProduct.created_at.desc())
+
+    result = await db.execute(query)
     candidates = result.scalars().all()
 
     items = []
     for candidate in candidates:
         pricing = candidate.pricing_assessment
         risk = candidate.risk_assessment
+        normalized_attrs = candidate.normalized_attributes or {}
+
         items.append(
             {
                 "id": str(candidate.id),
                 "title": candidate.title,
                 "source_platform": candidate.source_platform.value,
-                "platform_price": float(candidate.platform_price) if candidate.platform_price else None,
-                "estimated_margin": float(pricing.estimated_margin) if pricing and pricing.estimated_margin is not None else None,
-                "margin_percentage": float(pricing.margin_percentage) if pricing and pricing.margin_percentage is not None else None,
+                "platform_price": float(candidate.platform_price)
+                if candidate.platform_price
+                else None,
+                "estimated_margin": float(pricing.estimated_margin)
+                if pricing and pricing.estimated_margin is not None
+                else None,
+                "margin_percentage": float(pricing.margin_percentage)
+                if pricing and pricing.margin_percentage is not None
+                else None,
                 "risk_decision": risk.decision.value if risk else None,
                 "risk_score": risk.score if risk else None,
                 "status": candidate.status.value,
+                "priority_score": normalized_attrs.get("priority_score"),
+                "priority_rank": normalized_attrs.get("priority_rank"),
+                "seasonal_boost": normalized_attrs.get("seasonal_boost"),
                 "created_at": candidate.created_at,
             }
         )

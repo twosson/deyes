@@ -6,25 +6,51 @@ from uuid import uuid4
 from app.agents.base.agent import AgentContext, AgentResult, BaseAgent
 from app.core.config import get_settings
 from app.core.enums import CandidateStatus, SourcePlatform
+from app.core.seasonal_calendar import get_seasonal_calendar
 from app.db.models import CandidateProduct, SupplierMatch
+from app.services.demand_validator import DemandValidator
 from app.services.source_adapter import MockSourceAdapter, SourceAdapter
 from app.services.supplier_matcher import SupplierMatcherService
 
 
 class ProductSelectorAgent(BaseAgent):
-    """Agent for discovering candidate products."""
+    """Agent for discovering candidate products.
+
+    Phase 1 Enhancement: Added demand validation before product scraping.
+    - Validates search volume (>500 monthly searches)
+    - Checks competition density (avoid red ocean markets)
+    - Assesses trend direction (avoid declining markets)
+
+    Phase 4 Enhancement: Added seasonal boost for event-driven selection.
+    - 90-day lookahead for upcoming events
+    - Category-specific boost factors
+    - Prioritizes products for upcoming holidays
+    """
 
     def __init__(
         self,
         source_adapter: Optional[SourceAdapter] = None,
         supplier_matcher: Optional[SupplierMatcherService] = None,
+        demand_validator: Optional[DemandValidator] = None,
+        enable_demand_validation: bool = True,
+        enable_seasonal_boost: bool = True,
     ):
         super().__init__("product_selector")
         self.source_adapter = source_adapter
         self.supplier_matcher = supplier_matcher or SupplierMatcherService()
+        self.demand_validator = demand_validator or DemandValidator()
+        self.enable_demand_validation = enable_demand_validation
+        self.enable_seasonal_boost = enable_seasonal_boost
 
     async def execute(self, context: AgentContext) -> AgentResult:
-        """Execute product selection."""
+        """Execute product selection with demand validation and seasonal boost.
+
+        Phase 1 Enhancement: Validate demand before scraping to avoid wasting
+        resources on low-demand or high-competition products.
+
+        Phase 4 Enhancement: Apply seasonal boost to prioritize products for
+        upcoming events (90-day lookahead).
+        """
         created_adapter = False
 
         try:
@@ -36,6 +62,61 @@ class ProductSelectorAgent(BaseAgent):
             price_min = context.input_data.get("price_min")
             price_max = context.input_data.get("price_max")
             max_candidates = context.input_data.get("max_candidates", 10)
+
+            # Phase 1: Demand validation (if enabled)
+            validation_results = []
+            validated_keywords = keywords
+            if self.enable_demand_validation and keywords:
+                self.logger.info(
+                    "demand_validation_started",
+                    keywords=keywords,
+                    category=category,
+                    region=region,
+                )
+
+                validation_results = await self.demand_validator.validate_batch(
+                    keywords=keywords,
+                    category=category,
+                    region=region,
+                )
+
+                # Filter to only passed keywords
+                validated_keywords = [
+                    result.keyword
+                    for result in validation_results
+                    if result.passed
+                ]
+
+                failed_keywords = [
+                    result.keyword
+                    for result in validation_results
+                    if not result.passed
+                ]
+
+                self.logger.info(
+                    "demand_validation_completed",
+                    total_keywords=len(keywords),
+                    passed_keywords=len(validated_keywords),
+                    failed_keywords=len(failed_keywords),
+                    failed_list=failed_keywords,
+                )
+
+                # If all keywords failed validation, return early
+                if not validated_keywords:
+                    self.logger.warning(
+                        "all_keywords_failed_validation",
+                        keywords=keywords,
+                        returning_empty=True,
+                    )
+                    return AgentResult(
+                        success=True,
+                        output_data={
+                            "candidate_ids": [],
+                            "count": 0,
+                            "demand_validation_results": [r.to_dict() for r in validation_results],
+                            "skipped_reason": "all_keywords_failed_demand_validation",
+                        },
+                    )
 
             # Initialize source adapter if not provided
             if not self.source_adapter:
@@ -56,10 +137,10 @@ class ProductSelectorAgent(BaseAgent):
                 else:
                     self.source_adapter = MockSourceAdapter(platform)
 
-            # Fetch products from source platform
+            # Fetch products from source platform (using validated keywords)
             products = await self.source_adapter.fetch_products(
                 category=category,
-                keywords=keywords,
+                keywords=validated_keywords,
                 price_min=Decimal(str(price_min)) if price_min else None,
                 price_max=Decimal(str(price_max)) if price_max else None,
                 limit=max_candidates,
@@ -70,12 +151,62 @@ class ProductSelectorAgent(BaseAgent):
                 "products_fetched",
                 count=len(products),
                 platform=platform.value,
+                validated_keywords=validated_keywords,
             )
+
+            # Phase 4 Enhancement: Get seasonal boost factor
+            seasonal_boost = 1.0
+            if self.enable_seasonal_boost and category:
+                calendar = get_seasonal_calendar(lookahead_days=90)
+                seasonal_boost = calendar.get_boost_factor(category=category)
+
+                self.logger.info(
+                    "seasonal_boost_applied",
+                    category=category,
+                    boost_factor=seasonal_boost,
+                    strategy_run_id=str(context.strategy_run_id),
+                )
+
+            # Phase 4 Enhancement: Sort products by priority score
+            products_with_scores = []
+            if products:
+                products_with_scores = self._sort_products_by_priority(
+                    products=products,
+                    seasonal_boost=seasonal_boost,
+                    validation_results=validation_results,
+                )
+
+                self.logger.info(
+                    "products_sorted_by_priority",
+                    count=len(products_with_scores),
+                    top_product=products_with_scores[0][0].title if products_with_scores else None,
+                    top_score=round(products_with_scores[0][1], 3) if products_with_scores else None,
+                    strategy_run_id=str(context.strategy_run_id),
+                )
 
             candidate_ids = []
 
             # Process each product
-            for product in products:
+            for rank, (product, priority_score) in enumerate(products_with_scores, start=1):
+                # Phase 1 Enhancement: Get competition density for this product
+                competition_density = "unknown"
+                if self.enable_demand_validation and validated_keywords:
+                    # Try to find matching validation result
+                    for result in validation_results:
+                        if result.keyword in product.title.lower():
+                            competition_density = result.competition_density.value
+                            break
+
+                # Merge competition density into normalized_attributes
+                normalized_attributes = product.normalized_attributes or {}
+                normalized_attributes["competition_density"] = competition_density
+
+                # Phase 4 Enhancement: Add seasonal boost, priority score, and rank
+                if self.enable_seasonal_boost:
+                    normalized_attributes["seasonal_boost"] = seasonal_boost
+                    normalized_attributes["priority_score"] = round(priority_score, 4)
+                    normalized_attributes["priority_rank"] = rank
+
                 # Create candidate product record
                 candidate = CandidateProduct(
                     id=uuid4(),
@@ -92,7 +223,7 @@ class ProductSelectorAgent(BaseAgent):
                     rating=product.rating,
                     main_image_url=product.main_image_url,
                     raw_payload=product.raw_payload,
-                    normalized_attributes=product.normalized_attributes,
+                    normalized_attributes=normalized_attributes,
                     status=CandidateStatus.DISCOVERED,
                 )
                 context.db.add(candidate)
@@ -154,3 +285,107 @@ class ProductSelectorAgent(BaseAgent):
             if created_adapter and hasattr(self.source_adapter, "close"):
                 await self.source_adapter.close()
                 self.source_adapter = None
+
+    def _sort_products_by_priority(
+        self,
+        products: list,
+        seasonal_boost: float,
+        validation_results: list,
+    ) -> list[tuple]:
+        """Sort products by priority score.
+
+        Priority score combines:
+        - seasonal_boost: Seasonal event boost (1.0 - 2.0)
+        - sales_count: Product sales volume (normalized)
+        - rating: Product rating (0 - 5)
+        - competition_density: Market competition (inverse)
+
+        Args:
+            products: List of ProductData objects
+            seasonal_boost: Seasonal boost factor for category
+            validation_results: Demand validation results (for competition density)
+
+        Returns:
+            List of tuples: [(product, priority_score), ...]
+            Sorted by priority score (highest first)
+        """
+        # Build competition density map from validation results
+        competition_map = {}
+        for result in validation_results:
+            competition_map[result.keyword.lower()] = result.competition_density.value
+
+        def calculate_priority_score(product) -> float:
+            """Calculate priority score for a product."""
+            score = 0.0
+
+            # 1. Seasonal boost (weight: 40%)
+            # Range: 1.0 - 2.0 → normalized to 0.0 - 1.0
+            seasonal_component = (seasonal_boost - 1.0) * 0.4
+
+            # 2. Sales count (weight: 30%)
+            # Normalize using log scale to handle wide range
+            sales_component = 0.0
+            if product.sales_count and product.sales_count > 0:
+                # Log scale: 1 → 0, 10 → 0.3, 100 → 0.6, 1000 → 0.9, 10000 → 1.0
+                import math
+
+                sales_normalized = min(1.0, math.log10(product.sales_count) / 4.0)
+                sales_component = sales_normalized * 0.3
+
+            # 3. Rating (weight: 20%)
+            # Range: 0 - 5 → normalized to 0.0 - 1.0
+            rating_component = 0.0
+            if product.rating and product.rating > 0:
+                rating_normalized = float(product.rating) / 5.0
+                rating_component = rating_normalized * 0.2
+
+            # 4. Competition density (weight: 10%, inverse)
+            # LOW = 1.0, MEDIUM = 0.5, HIGH = 0.0, UNKNOWN = 0.3
+            competition_component = 0.0
+            competition_density = "unknown"
+
+            # Try to find matching validation result
+            for keyword in competition_map:
+                if keyword in product.title.lower():
+                    competition_density = competition_map[keyword]
+                    break
+
+            competition_scores = {
+                "low": 1.0,
+                "medium": 0.5,
+                "high": 0.0,
+                "unknown": 0.3,
+            }
+            competition_component = competition_scores.get(competition_density, 0.3) * 0.1
+
+            # Total score
+            total_score = (
+                seasonal_component + sales_component + rating_component + competition_component
+            )
+
+            return total_score
+
+        # Calculate scores and sort
+        products_with_scores = [
+            (product, calculate_priority_score(product)) for product in products
+        ]
+
+        # Sort by score (descending)
+        products_with_scores.sort(key=lambda x: x[1], reverse=True)
+
+        # Log top 5 products for debugging
+        self.logger.debug(
+            "product_priority_scores",
+            top_5=[
+                {
+                    "title": p.title,
+                    "score": round(score, 3),
+                    "sales": p.sales_count,
+                    "rating": float(p.rating) if p.rating else None,
+                }
+                for p, score in products_with_scores[:5]
+            ],
+        )
+
+        # Return sorted products with scores
+        return products_with_scores

@@ -23,9 +23,82 @@ class PricingConfig:
     DEFAULT_PAYMENT_FEE = Decimal("0.02")  # 2%
     DEFAULT_RETURN_RATE = Decimal("0.05")  # 5%
 
-    # Profitability thresholds
-    PROFITABLE_THRESHOLD = Decimal("0.30")  # 30%
-    MARGINAL_THRESHOLD = Decimal("0.15")  # 15%
+    # Profitability thresholds (updated 2026-03-26)
+    PROFITABLE_THRESHOLD = Decimal("0.35")  # 35% (raised from 30%)
+    MARGINAL_THRESHOLD = Decimal("0.20")  # 20% (raised from 15%)
+
+    # Platform-specific thresholds
+    PLATFORM_THRESHOLDS = {
+        "amazon": Decimal("0.40"),  # 40% (high fees, high competition)
+        "temu": Decimal("0.30"),  # 30% (lower fees, price-sensitive)
+        "aliexpress": Decimal("0.35"),  # 35% (moderate fees)
+        "ozon": Decimal("0.35"),  # 35% (moderate fees)
+        "rakuten": Decimal("0.38"),  # 38% (higher fees)
+        "mercado_libre": Decimal("0.35"),  # 35% (moderate fees)
+    }
+
+    # Category-specific thresholds
+    CATEGORY_THRESHOLDS = {
+        "electronics": Decimal("0.25"),  # 25% (low margin category)
+        "jewelry": Decimal("0.50"),  # 50% (high margin category)
+        "home": Decimal("0.35"),  # 35% (moderate margin)
+        "fashion": Decimal("0.40"),  # 40% (moderate-high margin)
+        "toys": Decimal("0.35"),  # 35% (moderate margin)
+        "beauty": Decimal("0.45"),  # 45% (high margin)
+        "sports": Decimal("0.35"),  # 35% (moderate margin)
+    }
+
+    @classmethod
+    def get_profitable_threshold(
+        cls,
+        platform: Optional[str] = None,
+        category: Optional[str] = None,
+    ) -> Decimal:
+        """Get effective profitable threshold based on platform and category.
+
+        Returns the maximum of platform-specific and category-specific thresholds,
+        falling back to the base threshold if neither is specified.
+
+        Args:
+            platform: Platform name (e.g., "amazon", "temu")
+            category: Category name (e.g., "electronics", "jewelry")
+
+        Returns:
+            Effective profitable threshold as Decimal
+        """
+        thresholds = [cls.PROFITABLE_THRESHOLD]
+
+        if platform:
+            platform_lower = platform.lower()
+            if platform_lower in cls.PLATFORM_THRESHOLDS:
+                thresholds.append(cls.PLATFORM_THRESHOLDS[platform_lower])
+
+        if category:
+            category_lower = category.lower()
+            if category_lower in cls.CATEGORY_THRESHOLDS:
+                thresholds.append(cls.CATEGORY_THRESHOLDS[category_lower])
+
+        return max(thresholds)
+
+    @classmethod
+    def get_marginal_threshold(
+        cls,
+        platform: Optional[str] = None,
+        category: Optional[str] = None,
+    ) -> Decimal:
+        """Get effective marginal threshold based on platform and category.
+
+        Marginal threshold is calculated as 60% of the profitable threshold.
+
+        Args:
+            platform: Platform name (e.g., "amazon", "temu")
+            category: Category name (e.g., "electronics", "jewelry")
+
+        Returns:
+            Effective marginal threshold as Decimal
+        """
+        profitable_threshold = cls.get_profitable_threshold(platform, category)
+        return profitable_threshold * Decimal("0.60")
 
     # Supplier path selection weights
     SUPPLIER_PRICE_WEIGHT = Decimal("0.45")
@@ -194,6 +267,8 @@ class PricingResult:
         platform_commission_rate: Decimal,
         payment_fee_rate: Decimal,
         return_rate_assumption: Decimal,
+        platform: Optional[str] = None,
+        category: Optional[str] = None,
     ):
         self.supplier_price = supplier_price
         self.platform_price = platform_price
@@ -201,6 +276,12 @@ class PricingResult:
         self.platform_commission_rate = platform_commission_rate
         self.payment_fee_rate = payment_fee_rate
         self.return_rate_assumption = return_rate_assumption
+        self.platform = platform
+        self.category = category
+
+        # Get dynamic thresholds based on platform and category
+        self.profitable_threshold = PricingConfig.get_profitable_threshold(platform, category)
+        self.marginal_threshold = PricingConfig.get_marginal_threshold(platform, category)
 
         # Calculate costs
         self.platform_commission = platform_price * platform_commission_rate
@@ -223,17 +304,17 @@ class PricingResult:
             else Decimal("0")
         )
 
-        # Determine profitability
+        # Determine profitability using dynamic thresholds
         margin_ratio = self.estimated_margin / platform_price if platform_price > 0 else Decimal("0")
-        if margin_ratio >= PricingConfig.PROFITABLE_THRESHOLD:
+        if margin_ratio >= self.profitable_threshold:
             self.profitability_decision = ProfitabilityDecision.PROFITABLE
-        elif margin_ratio >= PricingConfig.MARGINAL_THRESHOLD:
+        elif margin_ratio >= self.marginal_threshold:
             self.profitability_decision = ProfitabilityDecision.MARGINAL
         else:
             self.profitability_decision = ProfitabilityDecision.UNPROFITABLE
 
-        # Recommended price (add 20% buffer to break-even)
-        break_even = self.total_cost / (1 - PricingConfig.PROFITABLE_THRESHOLD)
+        # Recommended price (using dynamic profitable threshold)
+        break_even = self.total_cost / (1 - self.profitable_threshold)
         self.recommended_price = break_even.quantize(Decimal("0.01"))
 
     def to_dict(self) -> dict:
@@ -250,6 +331,10 @@ class PricingResult:
             "margin_percentage": float(self.margin_percentage),
             "recommended_price": float(self.recommended_price),
             "profitability_decision": self.profitability_decision.value,
+            "platform": self.platform,
+            "category": self.category,
+            "profitable_threshold": float(self.profitable_threshold),
+            "marginal_threshold": float(self.marginal_threshold),
             "explanation": {
                 "breakdown": {
                     "supplier_price": float(self.supplier_price),
@@ -261,6 +346,10 @@ class PricingResult:
                 "total_cost": float(self.total_cost),
                 "revenue": float(self.platform_price),
                 "margin": float(self.estimated_margin),
+                "thresholds": {
+                    "profitable": float(self.profitable_threshold),
+                    "marginal": float(self.marginal_threshold),
+                },
             },
         }
 
@@ -307,8 +396,24 @@ class PricingService:
         platform_commission_rate: Optional[Decimal] = None,
         payment_fee_rate: Optional[Decimal] = None,
         return_rate_assumption: Optional[Decimal] = None,
+        platform: Optional[str] = None,
+        category: Optional[str] = None,
     ) -> PricingResult:
-        """Calculate pricing and profitability."""
+        """Calculate pricing and profitability.
+
+        Args:
+            supplier_price: Supplier price
+            platform_price: Platform selling price
+            shipping_cost: Shipping cost (optional, defaults to 15% of supplier price)
+            platform_commission_rate: Platform commission rate (optional, defaults to 10%)
+            payment_fee_rate: Payment fee rate (optional, defaults to 2%)
+            return_rate_assumption: Return rate assumption (optional, defaults to 5%)
+            platform: Platform name for dynamic threshold (e.g., "amazon", "temu")
+            category: Category name for dynamic threshold (e.g., "electronics", "jewelry")
+
+        Returns:
+            PricingResult with profitability decision based on dynamic thresholds
+        """
         # Use defaults if not provided
         shipping_cost = shipping_cost or (supplier_price * self.config.DEFAULT_SHIPPING_RATE)
         platform_commission_rate = (
@@ -324,6 +429,8 @@ class PricingService:
             platform_commission_rate=platform_commission_rate,
             payment_fee_rate=payment_fee_rate,
             return_rate_assumption=return_rate_assumption,
+            platform=platform,
+            category=category,
         )
 
         logger.info(
@@ -332,6 +439,10 @@ class PricingService:
             platform_price=float(platform_price),
             margin_percentage=float(result.margin_percentage),
             decision=result.profitability_decision.value,
+            platform=platform,
+            category=category,
+            profitable_threshold=float(result.profitable_threshold),
+            marginal_threshold=float(result.marginal_threshold),
         )
 
         return result

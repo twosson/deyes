@@ -1,4 +1,9 @@
-"""Risk Controller Agent."""
+"""Risk Controller Agent.
+
+Phase 2 Enhancement: Added competition density risk assessment.
+- Compliance risk (brand, category, price) - 60% weight
+- Competition risk (market saturation) - 40% weight
+"""
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
@@ -10,7 +15,10 @@ from app.services.risk_rules import RiskRulesEngine
 
 
 class RiskControllerAgent(BaseAgent):
-    """Agent for IP infringement and compliance screening."""
+    """Agent for IP infringement and compliance screening.
+
+    Phase 2 Enhancement: Now includes competition density assessment.
+    """
 
     def __init__(self, risk_engine: RiskRulesEngine = None):
         super().__init__("risk_controller")
@@ -52,6 +60,11 @@ class RiskControllerAgent(BaseAgent):
                     if candidate.platform_price
                     else None,
                 }
+
+                # Phase 2 Enhancement: Add competition density from normalized_attributes
+                normalized_attrs = candidate.normalized_attributes or {}
+                competition_density = normalized_attrs.get("competition_density", "unknown")
+                product_data["competition_density"] = competition_density
 
                 # Run risk assessment
                 risk_result = self.risk_engine.assess(product_data)

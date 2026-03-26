@@ -118,10 +118,11 @@ graph TD
   - 图7-8: 包装、配件
 
 技术参数:
-  - 模型: FLUX.2 dev (FP8)
+  - 模型: FLUX.1-dev (FP8) + Turbo LoRA + IPAdapter Plus + ControlNet
   - 分辨率: 1024x1024 (主图), 800x1200 (详情页)
-  - 生成时间: 15秒/张 (TensorRT加速)
-  - ControlNet: 保持产品一致性
+  - 生成时间: 8-12秒/张 (主图), 10-15秒/张 (详情页)
+  - IPAdapter: 风格迁移，保持爆款风格一致性
+  - ControlNet: 结构控制，防止产品变形
 ```
 
 **步骤4: 质量检测**

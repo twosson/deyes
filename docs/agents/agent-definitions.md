@@ -126,8 +126,9 @@ def select_products(strategy):
 **工具**:
 - Qwen2-VL (视觉理解)
 - ComfyUI API
-- FLUX.2 dev
-- ControlNet
+- FLUX.1-dev (FP8) + Turbo LoRA
+- IPAdapter Plus (风格迁移)
+- ControlNet (结构控制)
 
 **输入**:
 - 竞品图片URL
@@ -162,12 +163,15 @@ def replicate_images(product):
     for prompt in prompts:
         image = comfyui_api.generate(
             prompt=prompt,
-            model="flux2-dev-fp8",
+            model="flux1-dev-fp8",
+            turbo_lora=True,  # 3倍速度提升
+            ipadapter_weight=0.85,  # 风格迁移强度
+            controlnet_canny=0.8,  # 边缘控制
+            controlnet_depth=0.7,  # 深度控制
             width=1024,
             height=1024,
-            controlnet=product.reference_image,  # 保持产品一致性
-            steps=20,
-            cfg_scale=7.5
+            steps=8,  # Turbo LoRA 减少步数
+            cfg_scale=3.5
         )
         images.append(image)
 

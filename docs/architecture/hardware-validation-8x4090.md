@@ -69,36 +69,38 @@ MoE架构: 256个专家，每次激活8个专家+1个共享专家
 
 ---
 
-### 方案2: FLUX.2 dev (图像生成)
+### 方案2: FLUX.1-dev (图像生成)
 
-**数据来源**: [FLUX.2 dev RTX 4090 Performance](https://droid4x.com/best-gpu-for-stable-diffusion-sdxl-and-flux/)
+**数据来源**: [FLUX.1-dev RTX 4090 Performance](https://droid4x.com/best-gpu-for-stable-diffusion-sdxl-and-flux/)
 
 ```
-模型大小: ~12GB (FP16)
+模型大小: ~13GB (FP8)
 单张图片生成:
 - 分辨率: 1024x1024
-- 步数: 20步
-- 时间: 2-3秒 (RTX 4090)
-- 显存占用: ~12GB
+- 步数: 8步 (Turbo LoRA)
+- 时间: 1秒 (RTX 4090 + Turbo LoRA)
+- 显存占用: ~13GB
 
 批处理 (Batch Size):
-- Batch=1: 12GB显存，3秒/张
-- Batch=2: 18GB显存，5秒/2张 (2.5秒/张)
+- Batch=1: 13GB显存，1秒/张
+- Batch=2: 20GB显存，1.5秒/2张 (0.75秒/张)
 - Batch=4: 无法运行 (超过24GB)
 
 4卡并行:
 - 4个独立任务同时生成
 - 每卡Batch=1
-- 总吞吐: 4张/3秒 = 80张/分钟 = 4800张/小时
+- 总吞吐: 4张/秒 = 240张/分钟 = 14,400张/小时
 
-加速方案 (Turbo LoRA):
-- 步数: 20 → 8步
+加速方案 (Turbo LoRA + IPAdapter Plus + ControlNet):
+- 步数: 20 → 8步 (Turbo LoRA)
 - 时间: 3秒 → 1秒/张
-- 显存: 12GB (不变)
+- 显存: 13GB (FP8量化)
+- IPAdapter Plus: 风格迁移，保持爆款风格一致性
+- ControlNet: 结构控制，防止产品变形
 - 总吞吐: 4张/秒 = 240张/分钟 = 14,400张/小时 ✅
 ```
 
-**结论**: 4卡4090 + Turbo LoRA可以达到14,400张/小时，远超需求。
+**结论**: 4卡4090 + FLUX.1-dev + Turbo LoRA + IPAdapter Plus + ControlNet 可以达到14,400张/小时，远超需求。
 
 ---
 
@@ -107,10 +109,10 @@ MoE架构: 256个专家，每次激活8个专家+1个共享专家
 ### 最终配置
 
 ```
-卡0-3: ComfyUI (FLUX.2 dev + Turbo LoRA)
+卡0-3: ComfyUI (FLUX.1-dev FP8 + Turbo LoRA + IPAdapter Plus + ControlNet)
 - 每卡独立运行
 - Batch Size = 1
-- 显存占用: 12GB/卡
+- 显存占用: 13GB/卡
 - 吞吐量: 4张/秒 = 14,400张/小时
 
 卡4-7: SGLang (Qwen3.5-35B-A3B FP8)
@@ -128,7 +130,7 @@ MoE架构: 256个专家，每次激活8个专家+1个共享专家
 
 ```
 硬件: 4卡4090 (卡0-3)
-模型: FLUX.2 dev + Turbo LoRA
+模型: FLUX.1-dev FP8 + Turbo LoRA + IPAdapter Plus + ControlNet
 
 单套商品图片需求:
 - 主图: 2张
@@ -488,7 +490,7 @@ NVMe SSD性能:
 
 ```
 GPU分配:
-- 卡0-3: ComfyUI (FLUX.2 dev + Turbo LoRA)
+- 卡0-3: ComfyUI (FLUX.1-dev FP8 + Turbo LoRA + IPAdapter Plus + ControlNet)
 - 卡4-7: SGLang (Qwen3.5-35B-A3B FP8)
 
 性能:
@@ -556,7 +558,7 @@ Phase 4: 生产运行
 - [RTX 4090 AI Performance Guide](https://www.rightnowai.co/guides/gpu-comparison/rtx-4090)
 
 ### 性能测试
-- [FLUX.2 dev RTX 4090 Benchmarks](https://droid4x.com/best-gpu-for-stable-diffusion-sdxl-and-flux/)
+- [FLUX.1-dev RTX 4090 Benchmarks](https://droid4x.com/best-gpu-for-stable-diffusion-sdxl-and-flux/)
 - [Qwen3.5-35B-A3B Specifications](https://apxml.com/models/qwen35-35b-a3b)
 - [SGLang Tensor Parallel Efficiency](https://lmsys.org/blog/2026-01-15-chunked-pipeline/)
 

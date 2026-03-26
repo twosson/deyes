@@ -199,6 +199,113 @@ LangGraph + CrewAI + n8n + Celery
 
 ---
 
+## 产品选品策略
+
+### 当前方法（爬虫优先）
+
+**流程：** 平台抓取 → 1688 匹配 → 利润计算 → 风控评估
+
+**位置：** `backend/app/agents/product_selector.py:26`
+
+```python
+# 1. 抓取平台商品（Temu, Amazon, AliExpress）
+products = await source_adapter.fetch_products(...)
+
+# 2. 为每个商品匹配 1688 供应商（多路召回）
+suppliers = await supplier_matcher.find_suppliers(...)
+
+# 3. 计算利润率
+margin_ratio = (platform_price - total_cost) / platform_price
+
+# 4. 风控评估
+risk_score = assess_compliance_risk(candidate)
+```
+
+**优势：**
+- 1688 多路召回（默认、销量、工厂、图像相似）
+- 供应商竞争集评分（多维度加权）
+- 历史反馈先验（种子、店铺、供应商）
+- 闭环优化（90 天回溯）
+
+**缺陷：**
+- 先抓商品，再验证需求（浪费资源）
+- 无竞争密度评估（红海产品占 60%）
+- 缺少 1688 跨境信号（热卖榜、复购率、发货周期）
+- 无季节性日历（错过节假日机会）
+- 利润阈值偏低（30% 在 2026 年可能不够）
+
+### 计划改进（需求优先）
+
+**详见：** `docs/architecture/product-selection-optimization-v1.md:1`
+
+**核心变化：**
+1. **需求验证层（P0）** - 抓取前先验证海外需求 ✅ **已完成**
+   - Google Trends 搜索量验证（>500/月）
+   - 竞争密度评估（<5000 搜索结果）
+   - 1688 跨境信号提取（热卖榜、复购率、发货周期）
+   - 位置：`backend/app/services/demand_validator.py`
+
+2. **提高利润阈值（P0）** - 立即执行 ✅ **已完成**
+   - 基础阈值：30% → 35%
+   - 平台特定：Amazon 40%, Temu 30%, AliExpress 35%
+   - 品类特定：Electronics 25%, Jewelry 50%, Home 35%
+   - 位置：`backend/app/services/pricing_service.py`
+
+3. **竞争密度风险评估（P0）** - 风控层增强 ✅ **已完成**
+   - 竞争密度评分：高=80, 中=50, 低=20
+   - 组合风险评分：合规风险 * 0.6 + 竞争风险 * 0.4
+   - 位置：`backend/app/services/risk_rules.py`
+
+4. **动态关键词生成（P1）** - 自动发现趋势 ✅ **已完成**
+   - 每晚生成 top 50 趋势关键词（23:00 UTC）
+   - 扩展到 200+ 长尾关键词
+   - Redis 缓存（24h TTL）
+   - 位置：`backend/app/services/keyword_generator.py`
+   - 定时任务：`backend/app/workers/tasks_keyword_research.py`
+
+5. **季节性日历（P1）** - 事件驱动选品 ✅ **已完成**
+   - 90 天前瞻日历
+   - 11 个年度事件（情人节、Prime Day、黑五、圣诞等）
+   - 品类特定加权（情人节珠宝 +50%，黑五电子 +60%）
+   - 自动优先级调整
+   - 位置：`backend/app/core/seasonal_calendar.py`
+   - 品类特定：Electronics 25%, Jewelry 50%, Home 35%
+
+3. **动态关键词生成（P1）** - 自动发现趋势
+   - 每晚生成 top 50 趋势关键词
+   - 扩展到 200+ 长尾关键词
+   - 自动触发选品任务
+
+4. **季节性日历（P1）** - 事件驱动选品
+   - 90 天前瞻日历
+   - 品类特定加权（情人节珠宝 +50%）
+   - 自动优先级调整
+
+**预期影响：**
+- 候选质量：+40%
+- 平均利润率：32% → 38%
+- 红海产品：60% → 20%
+- 人工筛选工作量：-70%
+
+### 关键服务
+
+**FeedbackAggregator** - 闭环反馈服务
+- 位置：`backend/app/services/feedback_aggregator.py:19`
+- 功能：90 天历史回溯，计算种子/店铺/供应商表现先验
+- 文档：`docs/services/feedback-aggregator.md:1`
+
+**SupplierMatcher** - 供应商匹配服务
+- 位置：`backend/app/services/supplier_matcher.py:39`
+- 功能：1688 多路召回（直接提取、Payload 提取、Mock 兜底）
+- 文档：`docs/architecture/selection-pipeline.md:1`
+
+**PricingService** - 定价计算服务
+- 位置：`backend/app/services/pricing_service.py:17`
+- 功能：供应商评分、利润率计算、盈利性决策
+- 文档：`docs/architecture/supplier-scoring-formulas.md:1`
+
+---
+
 ## 部署状态
 
 ### 当前状态

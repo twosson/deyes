@@ -44,10 +44,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
    - 模型选型分析
    - 电商场景适配性对比
 
-5. **[实施计划](docs/deployment/implementation-plan.md)** ⭐⭐⭐
-   - 4周实施时间表
-   - 里程碑和交付物
-
 ### 📋 业务文档
 
 - **[Agent定义](docs/agents/agent-definitions.md)** - 24个数字员工岗位定义

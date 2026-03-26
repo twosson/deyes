@@ -346,10 +346,15 @@ class ExperimentService:
             changed_association_keys: set[tuple[UUID, UUID]] = set()
 
             # Update all associations: set is_main=False, then set winner to True
-            for assoc, _ in associations:
+            for assoc, asset in associations:
                 if assoc.is_main:
                     assoc.is_main = False
                     changed_association_keys.add((assoc.listing_id, assoc.asset_id))
+
+                # Archive loser assets
+                if asset.variant_group != winner_variant_group:
+                    if not asset.archived:
+                        asset.archived = True
 
             if not winner_assoc.is_main:
                 winner_assoc.is_main = True

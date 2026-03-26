@@ -474,6 +474,66 @@ async def test_content_asset_manager_mock(db_session: AsyncSession, sample_candi
 
 
 @pytest.mark.asyncio
+async def test_content_asset_manager_multi_variant_generation(
+    db_session: AsyncSession, sample_candidate_product: CandidateProduct
+):
+    """Test ContentAssetManager multi-variant generation with variant_count."""
+    from unittest.mock import AsyncMock
+
+    mock_comfyui = AsyncMock()
+    mock_comfyui.generate_product_image = AsyncMock(return_value=b"fake_image_data")
+
+    mock_minio = AsyncMock()
+    mock_minio.upload_image = AsyncMock(
+        return_value="https://minio.example.com/deyes-assets/products/123/main_image/minimalist/img1.png"
+    )
+
+    agent = ContentAssetManagerAgent(
+        comfyui_client=mock_comfyui,
+        minio_client=mock_minio,
+    )
+
+    from app.agents.base.agent import AgentContext
+
+    context = AgentContext(
+        strategy_run_id=uuid4(),
+        db=db_session,
+        input_data={
+            "candidate_product_id": str(sample_candidate_product.id),
+            "asset_types": ["main_image"],
+            "styles": ["minimalist"],
+            "variant_count": 3,
+            "generate_count": 1,
+            "platforms": ["temu"],
+            "regions": ["us"],
+        },
+    )
+
+    result = await agent.execute(context)
+
+    assert result.success is True
+    assert result.output_data["assets_created"] == 3
+    assert result.output_data["variant_count"] == 3
+    assert result.output_data["variant_group"] is not None
+
+    await db_session.commit()
+    assets = await db_session.execute(
+        select(ContentAsset).where(ContentAsset.candidate_product_id == sample_candidate_product.id)
+    )
+    assets_list = list(assets.scalars().all())
+    assert len(assets_list) == 3
+
+    variant_group = assets_list[0].variant_group
+    assert variant_group is not None
+    for asset in assets_list:
+        assert asset.variant_group == variant_group
+
+    style_tags = {asset.style_tags[0] for asset in assets_list}
+    assert len(style_tags) == 3
+    assert "minimalist" in style_tags
+
+
+@pytest.mark.asyncio
 async def test_platform_publisher_temu_mock(
     db_session: AsyncSession,
     sample_candidate_product: CandidateProduct,

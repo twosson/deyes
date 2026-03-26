@@ -73,12 +73,19 @@ class ContentAssetManagerAgent(BaseAgent):
             platforms = context.input_data.get("platforms", [])
             regions = context.input_data.get("regions", [])
             variant_group = context.input_data.get("variant_group")
+            variant_count = context.input_data.get("variant_count")
 
             self.logger.info(
                 "content_generation_started",
                 candidate_product_id=str(candidate_product_id),
                 asset_types=asset_types,
                 styles=styles,
+            )
+
+            styles, resolved_variant_group = self._resolve_variant_configuration(
+                styles=styles,
+                variant_count=variant_count,
+                variant_group=variant_group,
             )
 
             # Initialize clients
@@ -111,7 +118,7 @@ class ContentAssetManagerAgent(BaseAgent):
                                 reference_images=reference_images,
                                 platforms=platforms,
                                 regions=regions,
-                                variant_group=variant_group,
+                                variant_group=resolved_variant_group,
                                 index=i + 1,
                             )
                             if asset:
@@ -147,11 +154,44 @@ class ContentAssetManagerAgent(BaseAgent):
                     "assets_created": len(created_assets),
                     "asset_ids": [str(a.id) for a in created_assets],
                     "lifecycle_status": candidate.lifecycle_status.value if candidate.lifecycle_status else None,
+                    "variant_group": resolved_variant_group,
+                    "variant_count": len(styles) if resolved_variant_group else None,
                 },
             )
 
         except Exception as e:
             return await self._handle_error(e, context)
+
+    def _resolve_variant_configuration(
+        self,
+        *,
+        styles: list[str],
+        variant_count: int | None,
+        variant_group: str | None,
+    ) -> tuple[list[str], str | None]:
+        """Resolve style variants and variant group assignment for generation."""
+        normalized_styles = list(dict.fromkeys(styles)) or ["minimalist"]
+
+        if variant_count is None:
+            return normalized_styles, variant_group
+
+        if variant_count < 1:
+            raise ValueError("variant_count must be at least 1")
+        if variant_count > len(self.STYLE_PROMPTS):
+            raise ValueError(
+                f"variant_count exceeds available style presets ({len(self.STYLE_PROMPTS)})"
+            )
+
+        variant_styles = normalized_styles[:variant_count]
+        if len(variant_styles) < variant_count:
+            for style_name in self.STYLE_PROMPTS:
+                if style_name in variant_styles:
+                    continue
+                variant_styles.append(style_name)
+                if len(variant_styles) == variant_count:
+                    break
+
+        return variant_styles, variant_group or str(uuid4())
 
     async def _generate_single_asset(
         self,

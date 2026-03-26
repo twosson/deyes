@@ -498,8 +498,12 @@ async def test_promote_winner_updates_main_flag(db_session: AsyncSession):
     # Verify associations
     await db_session.refresh(control_assoc)
     await db_session.refresh(challenger_assoc)
+    await db_session.refresh(control_asset)
+    await db_session.refresh(challenger_asset)
     assert control_assoc.is_main is False
     assert challenger_assoc.is_main is True
+    assert control_asset.archived is True
+    assert challenger_asset.archived is False
 
 
 @pytest.mark.asyncio

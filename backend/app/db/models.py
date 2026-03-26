@@ -312,6 +312,9 @@ class ContentAsset(Base, UpdateTimestampMixin):
     usage_count: Mapped[int] = mapped_column(Integer, default=0)
     conversion_rate: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(5, 4))  # 转化率（后续回填）
 
+    # 归档状态（A/B 测试输家素材）
+    archived: Mapped[bool] = mapped_column(default=False)
+
     # 版本控制
     version: Mapped[int] = mapped_column(Integer, default=1)
     parent_asset_id: Mapped[Optional[UUID]] = mapped_column(

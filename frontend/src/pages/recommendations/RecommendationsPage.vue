@@ -26,6 +26,14 @@ const candidateRecommendationQuery = useCandidateRecommendationQuery(
 
 const recommendations = computed(() => recommendationsQuery.data.value?.items ?? [])
 const selectedRecommendation = computed(() => candidateRecommendationQuery.data.value)
+const drawerOpen = computed({
+  get: () => !!selectedCandidateId.value,
+  set: (value: boolean) => {
+    if (!value) {
+      selectedCandidateId.value = undefined
+    }
+  },
+})
 
 const levelColor = (level: string) => {
   switch (level) {
@@ -234,7 +242,7 @@ const columns = [
 
     <!-- 推荐详情抽屉 -->
     <a-drawer
-      v-model:open="!!selectedCandidateId"
+      v-model:open="drawerOpen"
       title="推荐详情"
       width="720"
       @close="selectedCandidateId = undefined"

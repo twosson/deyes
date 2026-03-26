@@ -8,7 +8,9 @@ from app.api import (
     routes_agent_runs,
     routes_candidates,
     routes_content_assets,
+    routes_experiments,
     routes_health,
+    routes_performance,
     routes_platform_listings,
     routes_products,
 )
@@ -53,6 +55,10 @@ app.include_router(routes_candidates.router, prefix=settings.api_prefix, tags=["
 app.include_router(routes_products.router, prefix=settings.api_prefix, tags=["products"])
 app.include_router(routes_content_assets.router, prefix=settings.api_prefix, tags=["content-assets"])
 app.include_router(routes_platform_listings.router, prefix=settings.api_prefix, tags=["platform-listings"])
+
+# Stage 1 Batch 3: Experiments and Performance
+app.include_router(routes_experiments.router, prefix=settings.api_prefix, tags=["experiments"])
+app.include_router(routes_performance.router, prefix=settings.api_prefix, tags=["performance"])
 
 
 @app.get("/")

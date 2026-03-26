@@ -11,6 +11,7 @@ const ExperimentsPage = () => import('@/pages/experiments/ExperimentsPage.vue')
 const PlatformListingsPage = () => import('@/pages/platform-listings/PlatformListingsPage.vue')
 const ProductDetailPage = () => import('@/pages/products/ProductDetailPage.vue')
 const ProductsPage = () => import('@/pages/products/ProductsPage.vue')
+const RecommendationsPage = () => import('@/pages/recommendations/RecommendationsPage.vue')
 const TaskMonitorPage = () => import('@/pages/task-monitor/TaskMonitorPage.vue')
 
 const routes: RouteRecordRaw[] = [
@@ -39,6 +40,12 @@ const routes: RouteRecordRaw[] = [
         name: 'products',
         component: ProductsPage,
         meta: { title: '商品中心', menuKey: '/products' },
+      },
+      {
+        path: 'recommendations',
+        name: 'recommendations',
+        component: RecommendationsPage,
+        meta: { title: '智能推荐', menuKey: '/recommendations' },
       },
       {
         path: 'products/:id',

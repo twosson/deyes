@@ -11,6 +11,7 @@ const uiStore = useUiStore()
 const menuItems = [
   { key: '/dashboard', label: '工作台' },
   { key: '/candidates', label: '选品岗位' },
+  { key: '/recommendations', label: '智能推荐' },
   { key: '/products', label: '商品中心' },
   { key: '/content-assets', label: '内容中心' },
   { key: '/experiments', label: 'A/B测试实验' },

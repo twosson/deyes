@@ -2,6 +2,7 @@ import type {
   CandidateRecommendation,
   ListRecommendationsParams,
   ListRecommendationsResponse,
+  RecommendationStatsOverview,
 } from '@/types/recommendations'
 import type { UUID } from '@/types/common'
 
@@ -28,4 +29,8 @@ export async function getCandidateRecommendation(
   candidateId: UUID,
 ): Promise<CandidateRecommendation> {
   return get<CandidateRecommendation>(`/candidates/${candidateId}/recommendation`)
+}
+
+export async function getRecommendationStatsOverview(): Promise<RecommendationStatsOverview> {
+  return get<RecommendationStatsOverview>('/recommendations/stats/overview')
 }

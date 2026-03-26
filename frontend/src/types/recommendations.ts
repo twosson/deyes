@@ -96,3 +96,22 @@ export interface ListRecommendationsParams {
   min_score?: number
   risk_level?: 'pass' | 'review' | 'reject'
 }
+
+export interface RecommendationStatsOverview {
+  total_recommendations: number
+  average_score: number
+  high_quality_count: number
+  high_quality_percentage: number
+  by_level: Record<string, number>
+  by_category: Record<string, number>
+  score_distribution: Array<{
+    range: string
+    count: number
+  }>
+  margin_vs_score: Array<{
+    score: number
+    margin: number
+    category: string
+  }>
+}
+

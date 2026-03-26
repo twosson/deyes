@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ReloadOutlined, StarFilled, TrophyOutlined } from '@ant-design/icons-vue'
-import { computed, ref } from 'vue'
+import { computed, h, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import { formatCurrency, formatDateTime, formatPercent } from '@/adapters/formatters'

@@ -6,6 +6,8 @@ const AnalyticsPage = () => import('@/pages/analytics/AnalyticsPage.vue')
 const CandidatesPage = () => import('@/pages/candidates/CandidatesPage.vue')
 const ContentAssetsPage = () => import('@/pages/content-assets/ContentAssetsPage.vue')
 const DashboardPage = () => import('@/pages/dashboard/DashboardPage.vue')
+const ExperimentDetailPage = () => import('@/pages/experiments/ExperimentDetailPage.vue')
+const ExperimentsPage = () => import('@/pages/experiments/ExperimentsPage.vue')
 const PlatformListingsPage = () => import('@/pages/platform-listings/PlatformListingsPage.vue')
 const ProductDetailPage = () => import('@/pages/products/ProductDetailPage.vue')
 const ProductsPage = () => import('@/pages/products/ProductsPage.vue')
@@ -49,6 +51,18 @@ const routes: RouteRecordRaw[] = [
         name: 'content-assets',
         component: ContentAssetsPage,
         meta: { title: '内容中心', menuKey: '/content-assets' },
+      },
+      {
+        path: 'experiments',
+        name: 'experiments',
+        component: ExperimentsPage,
+        meta: { title: 'A/B测试实验', menuKey: '/experiments' },
+      },
+      {
+        path: 'experiments/:id',
+        name: 'experiment-detail',
+        component: ExperimentDetailPage,
+        meta: { title: '实验详情', menuKey: '/experiments' },
       },
       {
         path: 'platform-listings',

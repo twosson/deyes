@@ -14,6 +14,7 @@ export interface ContentAsset {
   ai_quality_score: number | null
   human_approved: boolean
   usage_count: number
+  variant_group: string | null
   version: number
   created_at: string
 }

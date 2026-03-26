@@ -13,6 +13,7 @@ const menuItems = [
   { key: '/candidates', label: '选品岗位' },
   { key: '/products', label: '商品中心' },
   { key: '/content-assets', label: '内容中心' },
+  { key: '/experiments', label: 'A/B测试实验' },
   { key: '/platform-listings', label: '发布中心' },
   { key: '/task-monitor', label: '任务监控' },
   { key: '/analytics', label: '数据看板' },

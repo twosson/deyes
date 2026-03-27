@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.enums import PlatformListingStatus, TargetPlatform
-from app.db.database import get_db
+from app.db.session import get_db
 from app.db.models import PlatformListing
 from app.services.auto_action_engine import AutoActionEngine
 

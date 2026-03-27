@@ -132,6 +132,12 @@ class Settings(BaseSettings):
     enable_seasonal_boost: bool = True
     seasonal_calendar_lookahead_days: int = 90
 
+    # Product Selection Demand Discovery (Phase 7 Refactor)
+    product_selection_require_demand_discovery: bool = True
+    product_selection_allow_validated_seed_fallback: bool = True
+    product_selection_enable_runtime_keyword_generation: bool = True
+    product_selection_adapter_legacy_seed_mode: bool = False
+
     # Auto Action Engine (2026-03-27)
     enable_auto_actions: bool = True
 

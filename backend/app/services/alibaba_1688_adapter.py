@@ -293,7 +293,14 @@ class Alibaba1688Adapter(SourceAdapter):
         category: str | None,
         keywords: list[str],
     ) -> tuple[list[SearchSeed], str]:
-        """Build search seeds for explicit keyword, category, or cold-start mode."""
+        """Build search seeds from pre-validated keywords only.
+
+        Demand-first contract:
+        - When legacy mode is disabled, all search seeds must come from upstream
+          demand discovery / validation.
+        - When legacy mode is enabled, fall back to the historical seed generation
+          path for temporary compatibility.
+        """
         seeds: list[SearchSeed] = []
         seen_keywords: set[str] = set()
 
@@ -304,12 +311,44 @@ class Alibaba1688Adapter(SourceAdapter):
             seen_keywords.add(normalized)
             seeds.append(SearchSeed(keyword=normalized, seed_type=seed_type, source_keyword=source_keyword))
 
-        if keywords:
-            for keyword in keywords:
-                normalized = self._normalize_keyword(keyword)
-                if normalized:
-                    add_seed(normalized, "explicit", normalized)
-            return seeds, "explicit"
+        for keyword in keywords:
+            normalized = self._normalize_keyword(keyword)
+            if normalized:
+                add_seed(normalized, "explicit", normalized)
+
+        if seeds:
+            return seeds, "validated"
+
+        if not self.settings.product_selection_adapter_legacy_seed_mode:
+            self.logger.warning(
+                "alibaba_1688_no_validated_keywords",
+                category=category,
+                legacy_mode=False,
+            )
+            return [], "validated"
+
+        self.logger.warning(
+            "alibaba_1688_legacy_seed_mode_enabled",
+            category=category,
+            reason="empty_keywords",
+        )
+        return self._build_legacy_search_seeds(category=category)
+
+    def _build_legacy_search_seeds(
+        self,
+        *,
+        category: str | None,
+    ) -> tuple[list[SearchSeed], str]:
+        """Legacy seed generation path kept for temporary compatibility."""
+        seeds: list[SearchSeed] = []
+        seen_keywords: set[str] = set()
+
+        def add_seed(keyword: str, seed_type: str, source_keyword: str | None = None) -> None:
+            normalized = self._normalize_keyword(keyword)
+            if not normalized or normalized in seen_keywords:
+                return
+            seen_keywords.add(normalized)
+            seeds.append(SearchSeed(keyword=normalized, seed_type=seed_type, source_keyword=source_keyword))
 
         normalized_category = self._normalize_keyword(category)
         if normalized_category:

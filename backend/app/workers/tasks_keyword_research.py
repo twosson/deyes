@@ -54,21 +54,16 @@ async def _generate_keywords_for_category(
             min_trend_score=20,
         )
 
-        keywords = await generator.generate_trending_keywords(
+        keywords = await generator.generate_selection_keywords(
             category=category,
             region=region,
             limit=limit,
+            expand_top_n=10,
         )
 
-        # Expand top keywords with related queries
         expanded_keywords = []
-        for keyword_result in keywords[:10]:  # Expand top 10
-            related = await generator.expand_keyword(
-                keyword=keyword_result.keyword,
-                region=region,
-                limit=20,
-            )
-            expanded_keywords.extend(related)
+        for keyword_result in keywords:
+            expanded_keywords.extend(keyword_result.related_keywords)
 
         logger.info(
             "keywords_generated",

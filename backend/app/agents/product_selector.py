@@ -8,6 +8,7 @@ from app.core.config import get_settings
 from app.core.enums import CandidateStatus, SourcePlatform
 from app.core.seasonal_calendar import get_seasonal_calendar
 from app.db.models import CandidateProduct, SupplierMatch
+from app.services.demand_discovery_service import DemandDiscoveryService
 from app.services.demand_validator import DemandValidator
 from app.services.product_scoring_service import ProductScoreInput, ProductScoringService
 from app.services.source_adapter import MockSourceAdapter, SourceAdapter
@@ -17,12 +18,13 @@ from app.services.supplier_matcher import SupplierMatcherService
 class ProductSelectorAgent(BaseAgent):
     """Agent for discovering candidate products.
 
-    Phase 1 Enhancement: Added demand validation before product scraping.
-    - Validates search volume (>500 monthly searches)
-    - Checks competition density (avoid red ocean markets)
-    - Assesses trend direction (avoid declining markets)
+    Demand-first refactor:
+    - All 1688 searches must go through demand discovery first
+    - User keywords are validated before use
+    - Missing/failed keywords can recover via runtime generation
+    - Final fallback seeds must also be validated before use
 
-    Phase 4 Enhancement: Added seasonal boost for event-driven selection.
+    Seasonal enhancement:
     - 90-day lookahead for upcoming events
     - Category-specific boost factors
     - Prioritizes products for upcoming holidays
@@ -33,96 +35,103 @@ class ProductSelectorAgent(BaseAgent):
         source_adapter: Optional[SourceAdapter] = None,
         supplier_matcher: Optional[SupplierMatcherService] = None,
         demand_validator: Optional[DemandValidator] = None,
+        demand_discovery_service: Optional[DemandDiscoveryService] = None,
         enable_demand_validation: bool = True,
         enable_seasonal_boost: bool = True,
+        allow_keyword_fallback: Optional[bool] = None,
     ):
         super().__init__("product_selector")
+        self.settings = get_settings().model_copy(deep=True)
         self.source_adapter = source_adapter
         self.supplier_matcher = supplier_matcher or SupplierMatcherService()
-        self.demand_validator = demand_validator or DemandValidator()
+        self.demand_validator = demand_validator or DemandValidator(
+            min_search_volume=self.settings.demand_validation_min_search_volume,
+            use_helium10=self.settings.demand_validation_use_helium10,
+            helium10_api_key=self.settings.demand_validation_helium10_api_key or None,
+            cache_ttl_seconds=self.settings.demand_validation_cache_ttl_seconds,
+            enable_cache=self.settings.enable_demand_validation,
+        )
+        self.demand_discovery_service = demand_discovery_service or DemandDiscoveryService(
+            demand_validator=self.demand_validator,
+        )
         self.enable_demand_validation = enable_demand_validation
         self.enable_seasonal_boost = enable_seasonal_boost
+        self.require_demand_discovery = (
+            self.settings.product_selection_require_demand_discovery and enable_demand_validation
+        )
+        self.allow_keyword_fallback = (
+            self.settings.product_selection_allow_validated_seed_fallback
+            if allow_keyword_fallback is None
+            else allow_keyword_fallback
+        )
 
     async def execute(self, context: AgentContext) -> AgentResult:
-        """Execute product selection with demand validation and seasonal boost.
-
-        Phase 1 Enhancement: Validate demand before scraping to avoid wasting
-        resources on low-demand or high-competition products.
-
-        Phase 4 Enhancement: Apply seasonal boost to prioritize products for
-        upcoming events (90-day lookahead).
-        """
+        """Execute product selection with demand discovery and seasonal boost."""
         created_adapter = False
 
         try:
             # Extract input parameters
             platform = SourcePlatform(context.input_data.get("platform", "temu"))
             category = context.input_data.get("category")
-            keywords = context.input_data.get("keywords", [])
+            keywords = context.input_data.get("keywords") or []
             region = context.input_data.get("region")
             price_min = context.input_data.get("price_min")
             price_max = context.input_data.get("price_max")
             max_candidates = context.input_data.get("max_candidates", 10)
 
-            # Phase 1: Demand validation (if enabled)
+            demand_discovery_payload = None
             validation_results = []
             validated_keywords = keywords
-            if self.enable_demand_validation and keywords:
-                self.logger.info(
-                    "demand_validation_started",
-                    keywords=keywords,
+
+            # Demand-first keyword discovery
+            if self.require_demand_discovery:
+                discovery_result = await self.demand_discovery_service.discover_keywords(
                     category=category,
-                    region=region,
-                )
-
-                validation_results = await self.demand_validator.validate_batch(
                     keywords=keywords,
-                    category=category,
                     region=region,
+                    allow_fallback=self.allow_keyword_fallback,
+                    max_keywords=max_candidates,
                 )
-
-                # Filter to only passed keywords
-                validated_keywords = [
-                    result.keyword
-                    for result in validation_results
-                    if result.passed
-                ]
-
-                failed_keywords = [
-                    result.keyword
-                    for result in validation_results
-                    if not result.passed
+                demand_discovery_payload = discovery_result.to_dict()
+                validated_keywords = [item.keyword for item in discovery_result.validated_keywords]
+                validation_results = [
+                    item.validation
+                    for item in (discovery_result.validated_keywords + discovery_result.rejected_keywords)
+                    if item.validation is not None
                 ]
 
                 self.logger.info(
-                    "demand_validation_completed",
-                    total_keywords=len(keywords),
-                    passed_keywords=len(validated_keywords),
-                    failed_keywords=len(failed_keywords),
-                    failed_list=failed_keywords,
+                    "demand_discovery_completed",
+                    strategy_run_id=str(context.strategy_run_id),
+                    category=category,
+                    region=region,
+                    discovery_mode=discovery_result.discovery_mode,
+                    validated=len(discovery_result.validated_keywords),
+                    rejected=len(discovery_result.rejected_keywords),
+                    fallback_used=discovery_result.fallback_used,
+                    degraded=discovery_result.degraded,
                 )
 
-                # If all keywords failed validation, return early
                 if not validated_keywords:
                     self.logger.warning(
-                        "all_keywords_failed_validation",
-                        keywords=keywords,
-                        returning_empty=True,
+                        "no_validated_keywords_available",
+                        strategy_run_id=str(context.strategy_run_id),
+                        category=category,
+                        region=region,
                     )
                     return AgentResult(
                         success=True,
                         output_data={
                             "candidate_ids": [],
                             "count": 0,
-                            "demand_validation_results": [r.to_dict() for r in validation_results],
-                            "skipped_reason": "all_keywords_failed_demand_validation",
+                            "demand_discovery": demand_discovery_payload,
+                            "skipped_reason": "no_validated_keywords_available",
                         },
                     )
 
             # Initialize source adapter if not provided
             if not self.source_adapter:
-                settings = get_settings()
-                if settings.use_real_scrapers:
+                if self.settings.use_real_scrapers:
                     if platform == SourcePlatform.TEMU:
                         from app.services.temu_adapter_v2 import TemuSourceAdapterV2
 
@@ -138,7 +147,7 @@ class ProductSelectorAgent(BaseAgent):
                 else:
                     self.source_adapter = MockSourceAdapter(platform)
 
-            # Fetch products from source platform (using validated keywords)
+            # Fetch products from source platform using validated keywords only
             products = await self.source_adapter.fetch_products(
                 category=category,
                 keywords=validated_keywords,
@@ -153,9 +162,10 @@ class ProductSelectorAgent(BaseAgent):
                 count=len(products),
                 platform=platform.value,
                 validated_keywords=validated_keywords,
+                strategy_run_id=str(context.strategy_run_id),
             )
 
-            # Phase 4 Enhancement: Get seasonal boost factor
+            # Seasonal boost factor
             seasonal_boost = 1.0
             if self.enable_seasonal_boost and category:
                 calendar = get_seasonal_calendar(lookahead_days=90)
@@ -168,7 +178,7 @@ class ProductSelectorAgent(BaseAgent):
                     strategy_run_id=str(context.strategy_run_id),
                 )
 
-            # Phase 4 Enhancement: Sort products by priority score
+            # Sort products by priority score
             products_with_scores = []
             if products:
                 products_with_scores = self._sort_products_by_priority(
@@ -189,26 +199,21 @@ class ProductSelectorAgent(BaseAgent):
 
             # Process each product
             for rank, (product, priority_score) in enumerate(products_with_scores, start=1):
-                # Phase 1 Enhancement: Get competition density for this product
                 competition_density = "unknown"
-                if self.enable_demand_validation and validated_keywords:
-                    # Try to find matching validation result
+                if validation_results:
                     for result in validation_results:
-                        if result.keyword in product.title.lower():
+                        if result.keyword.lower() in product.title.lower():
                             competition_density = result.competition_density.value
                             break
 
-                # Merge competition density into normalized_attributes
                 normalized_attributes = product.normalized_attributes or {}
                 normalized_attributes["competition_density"] = competition_density
 
-                # Phase 4 Enhancement: Add seasonal boost, priority score, and rank
                 if self.enable_seasonal_boost:
                     normalized_attributes["seasonal_boost"] = seasonal_boost
                     normalized_attributes["priority_score"] = round(priority_score, 4)
                     normalized_attributes["priority_rank"] = rank
 
-                # Create candidate product record
                 candidate = CandidateProduct(
                     id=uuid4(),
                     strategy_run_id=context.strategy_run_id,
@@ -229,7 +234,6 @@ class ProductSelectorAgent(BaseAgent):
                 )
                 context.db.add(candidate)
 
-                # Find suppliers, preferring source-provided supplier candidates
                 suppliers = await self.supplier_matcher.find_suppliers(
                     product_title=product.title,
                     product_category=product.category,
@@ -243,7 +247,6 @@ class ProductSelectorAgent(BaseAgent):
                     },
                 )
 
-                # Create supplier match records
                 for supplier in suppliers:
                     supplier_match = SupplierMatch(
                         id=uuid4(),
@@ -257,7 +260,6 @@ class ProductSelectorAgent(BaseAgent):
                         raw_payload=supplier.raw_payload,
                         selected=False,
                     )
-                    # Explicitly set the relationship to avoid lazy loading during flush
                     supplier_match.candidate = candidate
                     context.db.add(supplier_match)
 
@@ -271,13 +273,14 @@ class ProductSelectorAgent(BaseAgent):
                 strategy_run_id=str(context.strategy_run_id),
             )
 
-            return AgentResult(
-                success=True,
-                output_data={
-                    "candidate_ids": candidate_ids,
-                    "count": len(candidate_ids),
-                },
-            )
+            output_data = {
+                "candidate_ids": candidate_ids,
+                "count": len(candidate_ids),
+            }
+            if demand_discovery_payload is not None:
+                output_data["demand_discovery"] = demand_discovery_payload
+
+            return AgentResult(success=True, output_data=output_data)
 
         except Exception as e:
             await context.db.rollback()
@@ -308,21 +311,17 @@ class ProductSelectorAgent(BaseAgent):
         """
         scoring_service = ProductScoringService()
 
-        # 从验证结果构建竞争密度映射
         competition_map = {}
         for result in validation_results:
             competition_map[result.keyword.lower()] = result.competition_density.value
 
         def calculate_priority_score(product) -> float:
-            """计算产品优先级分数."""
-            # 查找匹配的竞争密度
             competition_density = "unknown"
             for keyword in competition_map:
                 if keyword in product.title.lower():
                     competition_density = competition_map[keyword]
                     break
 
-            # 委托给服务
             score_input = ProductScoreInput(
                 title=product.title,
                 sales_count=product.sales_count,
@@ -334,15 +333,11 @@ class ProductSelectorAgent(BaseAgent):
             score_result = scoring_service.calculate_priority_score(score_input)
             return score_result.total_score
 
-        # 计算分数并排序
         products_with_scores = [
             (product, calculate_priority_score(product)) for product in products
         ]
-
-        # 按分数降序排序
         products_with_scores.sort(key=lambda x: x[1], reverse=True)
 
-        # 记录 top 5 用于调试
         self.logger.debug(
             "product_priority_scores",
             top_5=[

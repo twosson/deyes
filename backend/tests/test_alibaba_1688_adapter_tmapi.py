@@ -690,15 +690,29 @@ async def test_explicit_keyword_mode_uses_keyword_search():
 
 @pytest.mark.asyncio
 async def test_cold_start_mode_uses_config_seeds():
-    """Cold start should use configured seeds."""
+    """Cold start should use configured seeds in legacy mode."""
     client = FakeTMAPIClient()
     adapter = Alibaba1688Adapter(tmapi_client=client)
+    adapter.settings.product_selection_adapter_legacy_seed_mode = True
 
     products = await adapter.fetch_products(limit=4)
 
     assert client.search_items.called
     assert len(products) > 0
     assert any(product.normalized_attributes["seed_type"] in {"cold_start", "llm"} for product in products)
+
+
+@pytest.mark.asyncio
+async def test_demand_first_mode_returns_empty_without_keywords():
+    """Demand-first mode should return empty results when no keywords provided."""
+    client = FakeTMAPIClient()
+    adapter = Alibaba1688Adapter(tmapi_client=client)
+    adapter.settings.product_selection_adapter_legacy_seed_mode = False
+
+    products = await adapter.fetch_products(limit=4)
+
+    assert len(products) == 0
+    assert not client.search_items.called
 
 
 @pytest.mark.asyncio
@@ -719,6 +733,7 @@ async def test_historical_seed_recall_injects_high_performing_seeds():
         "member_id": "member-history-001",
     }]})
     adapter = Alibaba1688Adapter(tmapi_client=client, feedback_aggregator=FakeFeedbackAggregator())
+    adapter.settings.product_selection_adapter_legacy_seed_mode = True
     adapter.settings.tmapi_1688_enable_historical_feedback = True
     adapter.settings.tmapi_1688_suggest_limit_per_seed = 3
 
@@ -1277,6 +1292,7 @@ async def test_category_mode_adds_category_hotword_seeds_without_llm_by_default(
         image_products=[],
     )
     adapter = Alibaba1688Adapter(tmapi_client=client)
+    adapter.settings.product_selection_adapter_legacy_seed_mode = True
     adapter.settings.tmapi_1688_suggest_limit_per_seed = 1
 
     products = await adapter.fetch_products(category="手机配件", limit=2)
@@ -1329,6 +1345,7 @@ async def test_cold_start_prefers_seasonal_then_falls_back_to_cold_start():
         image_products=[],
     )
     adapter = Alibaba1688Adapter(tmapi_client=client)
+    adapter.settings.product_selection_adapter_legacy_seed_mode = True
     adapter.settings.tmapi_1688_seasonal_seed_limit = 1
     adapter.settings.tmapi_1688_min_seed_count = 2
     adapter._get_current_season = lambda: "summer"
@@ -1367,6 +1384,7 @@ async def test_cold_start_without_seasonal_hits_still_falls_back_to_cold_start_r
         image_products=[],
     )
     adapter = Alibaba1688Adapter(tmapi_client=client)
+    adapter.settings.product_selection_adapter_legacy_seed_mode = True
     adapter.settings.tmapi_1688_seasonal_seed_limit = 1
     adapter.settings.tmapi_1688_min_seed_count = 2
     adapter._get_current_season = lambda: "summer"

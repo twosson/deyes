@@ -102,7 +102,7 @@ def test_trigger_keyword_based_selection_raises_on_exception(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_generate_keywords_for_category_success():
-    """Helper should generate keywords for a category."""
+    """Helper should generate keywords for a category using generate_selection_keywords."""
     from app.services.keyword_generator import KeywordResult
 
     mock_results = [
@@ -111,7 +111,7 @@ async def test_generate_keywords_for_category_success():
             search_volume=5000,
             trend_score=75,
             competition_density="medium",
-            related_keywords=["bluetooth earbuds"],
+            related_keywords=["bluetooth earbuds", "true wireless earbuds"],
             category="electronics",
             region="US",
         )
@@ -121,8 +121,7 @@ async def test_generate_keywords_for_category_success():
         "app.workers.tasks_keyword_research.KeywordGenerator"
     ) as mock_generator_class:
         mock_generator = MagicMock()
-        mock_generator.generate_trending_keywords = AsyncMock(return_value=mock_results)
-        mock_generator.expand_keyword = AsyncMock(return_value=["bluetooth earbuds"])
+        mock_generator.generate_selection_keywords = AsyncMock(return_value=mock_results)
         mock_generator_class.return_value = mock_generator
 
         result = await tasks_keyword_research._generate_keywords_for_category(
@@ -136,6 +135,8 @@ async def test_generate_keywords_for_category_success():
     assert result["region"] == "US"
     assert len(result["base_keywords"]) == 1
     assert result["base_keywords"][0]["keyword"] == "wireless earbuds"
+    assert len(result["expanded_keywords"]) == 2
+    assert "bluetooth earbuds" in result["expanded_keywords"]
 
 
 @pytest.mark.asyncio
@@ -145,7 +146,7 @@ async def test_generate_keywords_for_category_failure():
         "app.workers.tasks_keyword_research.KeywordGenerator"
     ) as mock_generator_class:
         mock_generator = MagicMock()
-        mock_generator.generate_trending_keywords = AsyncMock(
+        mock_generator.generate_selection_keywords = AsyncMock(
             side_effect=RuntimeError("pytrends error")
         )
         mock_generator_class.return_value = mock_generator

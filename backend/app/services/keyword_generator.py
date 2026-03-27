@@ -124,6 +124,101 @@ class KeywordGenerator:
 
         return keywords
 
+    async def generate_selection_keywords(
+        self,
+        *,
+        category: Optional[str] = None,
+        region: str = "US",
+        limit: int = 20,
+        expand_top_n: int = 5,
+    ) -> list[KeywordResult]:
+        """Generate keywords for real-time product selection.
+
+        This method is optimized for product selection flow (vs nightly research).
+        It generates fewer keywords and optionally expands top results.
+
+        Args:
+            category: Product category (optional, defaults to "electronics")
+            region: Region code (default: "US")
+            limit: Maximum base keywords to generate (default: 20)
+            expand_top_n: Number of top keywords to expand (default: 5)
+
+        Returns:
+            List of KeywordResult objects
+        """
+        self.logger.info(
+            "selection_keyword_generation_started",
+            category=category,
+            region=region,
+            limit=limit,
+        )
+
+        # Generate base keywords
+        base_keywords = await self.generate_trending_keywords(
+            category=category or "electronics",
+            region=region,
+            limit=limit,
+        )
+
+        if not base_keywords:
+            self.logger.warning(
+                "selection_keyword_generation_no_base_keywords",
+                category=category,
+                region=region,
+            )
+            return []
+
+        # Optionally expand top keywords
+        if expand_top_n > 0:
+            expanded_keywords = []
+            for keyword_result in base_keywords[:expand_top_n]:
+                try:
+                    related = await self.expand_keyword(
+                        keyword=keyword_result.keyword,
+                        region=region,
+                        limit=5,  # Limit expansions per keyword
+                    )
+                    # Convert related strings to KeywordResult objects
+                    for related_kw in related:
+                        expanded_keywords.append(
+                            KeywordResult(
+                                keyword=related_kw,
+                                search_volume=keyword_result.search_volume // 2,  # Estimate
+                                trend_score=keyword_result.trend_score - 10,  # Slightly lower
+                                competition_density=keyword_result.competition_density,
+                                related_keywords=[],
+                                category=category,
+                                region=region,
+                            )
+                        )
+                except Exception as e:
+                    self.logger.warning(
+                        "selection_keyword_expansion_failed",
+                        keyword=keyword_result.keyword,
+                        error=str(e),
+                    )
+
+            # Combine base and expanded, deduplicate
+            all_keywords = base_keywords + expanded_keywords
+            seen = set()
+            unique_keywords = []
+            for kw in all_keywords:
+                if kw.keyword not in seen:
+                    seen.add(kw.keyword)
+                    unique_keywords.append(kw)
+
+            self.logger.info(
+                "selection_keyword_generation_completed",
+                category=category,
+                base_count=len(base_keywords),
+                expanded_count=len(expanded_keywords),
+                total_unique=len(unique_keywords),
+            )
+
+            return unique_keywords[:limit]
+
+        return base_keywords
+
     async def expand_keyword(
         self,
         keyword: str,

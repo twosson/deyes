@@ -19,7 +19,7 @@ const queryClient = new QueryClient({
 })
 
 message.config({
-  top: 72,
+  top: '72px',
   maxCount: 3,
   duration: 2.5,
 })

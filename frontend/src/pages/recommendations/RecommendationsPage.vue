@@ -199,7 +199,7 @@ const columns = [
               <a-progress
                 :percent="record.recommendation_score"
                 :stroke-color="record.recommendation_score >= 75 ? '#52c41a' : record.recommendation_score >= 60 ? '#faad14' : '#d9d9d9'"
-                :format="(percent) => `${percent?.toFixed(1)}分`"
+                :format="(percent: number) => `${percent?.toFixed(1)}分`"
               />
             </template>
 
@@ -285,7 +285,7 @@ const columns = [
                 type="circle"
                 :percent="selectedRecommendation.recommendation.score"
                 :stroke-color="selectedRecommendation.recommendation.score >= 75 ? '#52c41a' : selectedRecommendation.recommendation.score >= 60 ? '#faad14' : '#d9d9d9'"
-                :format="(percent) => `${percent?.toFixed(1)}分`"
+                :format="(percent: number) => `${percent?.toFixed(1)}分`"
               />
               <div style="margin-top: 16px">
                 <a-tag :color="levelColor(selectedRecommendation.recommendation.level)" style="font-size: 16px; padding: 8px 16px">

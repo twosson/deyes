@@ -39,9 +39,9 @@ export function useExperimentSummaryQuery(experimentId: MaybeRef<UUID | null | u
     queryKey: computed(() => ['experiments', 'summary', unref(experimentId)]),
     queryFn: () => getExperimentSummary(unref(experimentId) as UUID),
     enabled: computed(() => !!unref(experimentId)),
-    refetchInterval: (data) => {
+    refetchInterval: (query) => {
       // Poll every 30s if experiment is active
-      return data?.experiment_status === ('active' as ExperimentStatus) ? 30000 : false
+      return query.state.data?.experiment_status === ('active' as ExperimentStatus) ? 30000 : false
     },
   })
 }

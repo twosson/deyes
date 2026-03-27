@@ -1,7 +1,7 @@
 import type { ListRecommendationsParams } from '@/types/recommendations'
 import type { UUID } from '@/types/common'
 
-import { computed } from 'vue'
+import { computed, type MaybeRefOrGetter, toValue } from 'vue'
 import { useQuery } from '@tanstack/vue-query'
 
 import {
@@ -10,18 +10,18 @@ import {
   listRecommendations,
 } from '@/api/recommendations'
 
-export function useRecommendationsQuery(params?: ListRecommendationsParams) {
+export function useRecommendationsQuery(params?: MaybeRefOrGetter<ListRecommendationsParams>) {
   return useQuery({
-    queryKey: computed(() => ['recommendations', params]),
-    queryFn: () => listRecommendations(params),
+    queryKey: computed(() => ['recommendations', toValue(params)]),
+    queryFn: () => listRecommendations(toValue(params)),
   })
 }
 
-export function useCandidateRecommendationQuery(candidateId: UUID) {
+export function useCandidateRecommendationQuery(candidateId: MaybeRefOrGetter<UUID | null | undefined>) {
   return useQuery({
-    queryKey: ['candidate-recommendation', candidateId],
-    queryFn: () => getCandidateRecommendation(candidateId),
-    enabled: !!candidateId,
+    queryKey: computed(() => ['candidate-recommendation', toValue(candidateId)]),
+    queryFn: () => getCandidateRecommendation(toValue(candidateId) as UUID),
+    enabled: computed(() => !!toValue(candidateId)),
   })
 }
 

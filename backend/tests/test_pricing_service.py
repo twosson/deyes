@@ -277,3 +277,64 @@ def test_supplier_selection_returns_no_selection_when_all_prices_invalid():
     assert explanation["selection_reason"] == (
         "No supplier path had a valid supplier price, so pricing was skipped."
     )
+
+
+def test_platform_category_thresholds_applied():
+    """Test that platform and category specific thresholds are applied correctly."""
+    from app.core.enums import ProfitabilityDecision
+
+    service = PricingService()
+
+    # Test 1: Amazon candidate with 38% margin should be MARGINAL (Amazon threshold = 40%)
+    # Supplier: $20, Platform: $32 = 37.5% margin → below 40% = MARGINAL
+    result = service.calculate_pricing(
+        supplier_price=Decimal("20.00"),
+        platform_price=Decimal("32.00"),
+        platform="amazon",
+        category=None,
+    )
+    assert result.profitability_decision == ProfitabilityDecision.MARGINAL
+    assert result.profitable_threshold == Decimal("0.40")
+    assert result.margin_percentage < 40
+
+    # Test 2: Temu candidate with 32% margin should be PROFITABLE (Temu threshold = 30%)
+    result = service.calculate_pricing(
+        supplier_price=Decimal("20.00"),
+        platform_price=Decimal("30.00"),
+        platform="temu",
+        category=None,
+    )
+    assert result.profitability_decision == ProfitabilityDecision.PROFITABLE
+    assert result.profitable_threshold == Decimal("0.30")
+    assert result.margin_percentage >= 30
+
+    # Test 3: Electronics candidate needs 25% (electronics threshold = 25%)
+    result = service.calculate_pricing(
+        supplier_price=Decimal("75.00"),
+        platform_price=Decimal("100.00"),
+        platform=None,
+        category="electronics",
+    )
+    assert result.profitable_threshold == Decimal("0.25")
+
+    # Test 4: Jewelry candidate needs 50% (jewelry threshold = 50%)
+    result = service.calculate_pricing(
+        supplier_price=Decimal("50.00"),
+        platform_price=Decimal("80.00"),
+        platform=None,
+        category="jewelry",
+    )
+    # 80 - (50 + 7.5 + 8 + 1.6 + 2.5) = 80 - 69.6 = 10.4 margin = 13% < 50% → UNPROFITABLE
+    assert result.profitability_decision == ProfitabilityDecision.UNPROFITABLE
+    assert result.profitable_threshold == Decimal("0.50")
+
+    # Test 5: Combined - Amazon + Jewelry should use max(40%, 50%) = 50%
+    result = service.calculate_pricing(
+        supplier_price=Decimal("40.00"),
+        platform_price=Decimal("90.00"),
+        platform="amazon",
+        category="jewelry",
+    )
+    assert result.profitable_threshold == Decimal("0.50")
+    # 90 - (40 + 6 + 9 + 1.8 + 2) = 90 - 58.8 = 31.2 margin = 34.67% < 50% → MARGINAL
+    assert result.profitability_decision == ProfitabilityDecision.MARGINAL

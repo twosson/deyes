@@ -6,7 +6,10 @@ import { useQuery } from '@tanstack/vue-query'
 
 import {
   getCandidateRecommendation,
+  getRecommendationFeedbackStats,
   getRecommendationStatsOverview,
+  getRecommendationTrends,
+  getRecommendationsByPlatform,
   listRecommendations,
 } from '@/api/recommendations'
 
@@ -29,5 +32,40 @@ export function useRecommendationStatsOverviewQuery() {
   return useQuery({
     queryKey: ['recommendations', 'stats', 'overview'],
     queryFn: getRecommendationStatsOverview,
+  })
+}
+
+export function useRecommendationTrendsQuery(
+  params?: MaybeRefOrGetter<{
+    period?: 'day' | 'week' | 'month'
+    days?: number
+    min_score?: number
+  }>,
+) {
+  return useQuery({
+    queryKey: computed(() => ['recommendations', 'stats', 'trends', toValue(params)]),
+    queryFn: () => getRecommendationTrends(toValue(params)),
+  })
+}
+
+export function useRecommendationsByPlatformQuery(
+  params?: MaybeRefOrGetter<{
+    min_score?: number
+  }>,
+) {
+  return useQuery({
+    queryKey: computed(() => ['recommendations', 'stats', 'by-platform', toValue(params)]),
+    queryFn: () => getRecommendationsByPlatform(toValue(params)),
+  })
+}
+
+export function useRecommendationFeedbackStatsQuery(
+  params?: MaybeRefOrGetter<{
+    days?: number
+  }>,
+) {
+  return useQuery({
+    queryKey: computed(() => ['recommendations', 'stats', 'feedback', toValue(params)]),
+    queryFn: () => getRecommendationFeedbackStats(toValue(params)),
   })
 }

@@ -1,5 +1,14 @@
 import type { UUID } from '@/types/common'
-import type { AssetPerformanceDaily, ListingPerformanceDaily, PerformanceMetrics } from '@/types/performance'
+import type {
+  AssetPerformanceDaily,
+  AssetPerformanceRow,
+  AutoActionHistoryItem,
+  DashboardListResponse,
+  ListingPerformanceDaily,
+  ListingPerformanceRow,
+  PerformanceMetrics,
+  PerformanceOverview,
+} from '@/types/performance'
 
 import { get } from './http'
 
@@ -52,4 +61,26 @@ export async function getPerformanceTrends(
 
 export async function getAssetPerformanceSummary(assetId: UUID): Promise<PerformanceMetrics> {
   return get<PerformanceMetrics>(`/performance/assets/${assetId}/summary`)
+}
+
+export async function getPerformanceOverview(): Promise<PerformanceOverview> {
+  return get<PerformanceOverview>('/performance/dashboard/overview')
+}
+
+export async function getDashboardListings(limit = 20): Promise<DashboardListResponse<ListingPerformanceRow>> {
+  return get<DashboardListResponse<ListingPerformanceRow>>('/performance/dashboard/listings', {
+    params: { limit },
+  })
+}
+
+export async function getDashboardAssets(limit = 20): Promise<DashboardListResponse<AssetPerformanceRow>> {
+  return get<DashboardListResponse<AssetPerformanceRow>>('/performance/dashboard/assets', {
+    params: { limit },
+  })
+}
+
+export async function getRecentAutoActions(limit = 20): Promise<DashboardListResponse<AutoActionHistoryItem>> {
+  return get<DashboardListResponse<AutoActionHistoryItem>>('/performance/dashboard/recent-actions', {
+    params: { limit },
+  })
 }

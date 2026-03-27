@@ -11,13 +11,14 @@ const uiStore = useUiStore()
 const menuItems = [
   { key: '/dashboard', label: '工作台' },
   { key: '/candidates', label: '选品岗位' },
-  { key: '/recommendations', label: '智能推荐' },
+  { key: '/recommendations', label: '审批工作台' },
   { key: '/products', label: '商品中心' },
   { key: '/content-assets', label: '内容中心' },
   { key: '/experiments', label: 'A/B测试实验' },
   { key: '/platform-listings', label: '发布中心' },
   { key: '/task-monitor', label: '任务监控' },
   { key: '/analytics', label: '数据看板' },
+  { key: '/performance', label: '性能监控' },
 ]
 
 const selectedKeys = computed(() => [String(route.meta.menuKey ?? route.path)])

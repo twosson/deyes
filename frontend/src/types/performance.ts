@@ -38,3 +38,55 @@ export interface PerformanceMetrics {
   roas?: number
   avg_order_value: number
 }
+
+export interface PerformanceOverview {
+  active_listings_count: number
+  tracked_listings_count: number
+  low_roi_alerts: number
+  low_ctr_alerts: number
+}
+
+export interface ListingPerformanceRow {
+  listing_id: UUID
+  platform: string
+  region: string
+  platform_listing_id: string | null
+  price: number
+  currency: string
+  status: string
+  impressions: number
+  clicks: number
+  orders: number
+  revenue: number
+  ad_spend: number
+  ctr: number
+  cvr: number
+  roi: number
+  roas: number
+}
+
+export interface AssetPerformanceRow {
+  asset_id: UUID
+  asset_type: string
+  file_url: string
+  ai_quality_score: number | null
+  impressions: number
+  clicks: number
+  orders: number
+  revenue: number
+  ctr: number
+  cvr: number
+}
+
+export interface AutoActionHistoryItem {
+  event_id: UUID
+  event_type: string
+  listing_id: UUID | null
+  created_at: string | null
+  payload: Record<string, unknown>
+}
+
+export interface DashboardListResponse<T> {
+  items: T[]
+  count: number
+}

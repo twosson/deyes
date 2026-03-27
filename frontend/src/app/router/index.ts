@@ -3,15 +3,16 @@ import { createRouter, createWebHistory } from 'vue-router'
 
 const BasicLayout = () => import('@/layouts/BasicLayout.vue')
 const AnalyticsPage = () => import('@/pages/analytics/AnalyticsPage.vue')
+const ApprovalWorkbenchPage = () => import('@/pages/approval-workbench/ApprovalWorkbenchPage.vue')
 const CandidatesPage = () => import('@/pages/candidates/CandidatesPage.vue')
 const ContentAssetsPage = () => import('@/pages/content-assets/ContentAssetsPage.vue')
 const DashboardPage = () => import('@/pages/dashboard/DashboardPage.vue')
 const ExperimentDetailPage = () => import('@/pages/experiments/ExperimentDetailPage.vue')
 const ExperimentsPage = () => import('@/pages/experiments/ExperimentsPage.vue')
+const PerformanceMonitorPage = () => import('@/pages/performance/PerformanceMonitorPage.vue')
 const PlatformListingsPage = () => import('@/pages/platform-listings/PlatformListingsPage.vue')
 const ProductDetailPage = () => import('@/pages/products/ProductDetailPage.vue')
 const ProductsPage = () => import('@/pages/products/ProductsPage.vue')
-const RecommendationsPage = () => import('@/pages/recommendations/RecommendationsPage.vue')
 const TaskMonitorPage = () => import('@/pages/task-monitor/TaskMonitorPage.vue')
 
 const routes: RouteRecordRaw[] = [
@@ -44,8 +45,8 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'recommendations',
         name: 'recommendations',
-        component: RecommendationsPage,
-        meta: { title: '智能推荐', menuKey: '/recommendations' },
+        component: ApprovalWorkbenchPage,
+        meta: { title: '审批工作台', menuKey: '/recommendations' },
       },
       {
         path: 'products/:id',
@@ -88,6 +89,12 @@ const routes: RouteRecordRaw[] = [
         name: 'analytics',
         component: AnalyticsPage,
         meta: { title: '数据看板', menuKey: '/analytics' },
+      },
+      {
+        path: 'performance',
+        name: 'performance',
+        component: PerformanceMonitorPage,
+        meta: { title: '性能监控', menuKey: '/performance' },
       },
     ],
   },

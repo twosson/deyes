@@ -10,8 +10,12 @@ import type {
 import {
   getAssetPerformance,
   getAssetPerformanceSummary,
+  getDashboardAssets,
+  getDashboardListings,
   getListingPerformance,
+  getPerformanceOverview,
   getPerformanceTrends,
+  getRecentAutoActions,
 } from '@/api/performance'
 import type { UUID } from '@/types/common'
 
@@ -52,5 +56,35 @@ export function usePerformanceTrendsQuery(params?: MaybeRef<GetPerformanceTrends
     queryKey: computed(() => ['performance', 'trends', unref(params)]),
     queryFn: () => getPerformanceTrends(unref(params)),
     placeholderData: keepPreviousData,
+  })
+}
+
+// Dashboard queries
+
+export function usePerformanceOverviewQuery() {
+  return useQuery({
+    queryKey: ['performance', 'dashboard', 'overview'],
+    queryFn: getPerformanceOverview,
+  })
+}
+
+export function useDashboardListingsQuery(limit?: MaybeRef<number | undefined>) {
+  return useQuery({
+    queryKey: computed(() => ['performance', 'dashboard', 'listings', unref(limit)]),
+    queryFn: () => getDashboardListings(unref(limit)),
+  })
+}
+
+export function useDashboardAssetsQuery(limit?: MaybeRef<number | undefined>) {
+  return useQuery({
+    queryKey: computed(() => ['performance', 'dashboard', 'assets', unref(limit)]),
+    queryFn: () => getDashboardAssets(unref(limit)),
+  })
+}
+
+export function useRecentAutoActionsQuery(limit?: MaybeRef<number | undefined>) {
+  return useQuery({
+    queryKey: computed(() => ['performance', 'dashboard', 'recent-actions', unref(limit)]),
+    queryFn: () => getRecentAutoActions(unref(limit)),
   })
 }

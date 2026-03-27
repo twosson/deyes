@@ -132,6 +132,67 @@ class Settings(BaseSettings):
     enable_seasonal_boost: bool = True
     seasonal_calendar_lookahead_days: int = 90
 
+    # Auto Action Engine (2026-03-27)
+    enable_auto_actions: bool = True
+
+    # Auto Publish Rules
+    auto_publish_require_approval_first_time: bool = True
+    auto_publish_require_approval_high_risk: bool = True
+    auto_publish_require_approval_price_above: float = 100.0
+    auto_publish_require_approval_margin_below: float = 0.25
+    auto_publish_auto_execute_score_above: float = 75.0
+    auto_publish_auto_execute_risk_below: int = 30
+    auto_publish_auto_execute_margin_above: float = 0.35
+
+    # Auto Reprice Rules
+    auto_reprice_enable: bool = True
+    auto_reprice_target_roi: float = 0.30  # 30% ROI target
+    auto_reprice_low_roi_threshold: float = 0.24  # 80% of target
+    auto_reprice_high_roi_threshold: float = 0.36  # 120% of target
+    auto_reprice_decrease_percentage: float = 0.08  # Decrease by 8% (midpoint of 5-10%)
+    auto_reprice_increase_percentage: float = 0.04  # Increase by 4% (midpoint of 3-5%)
+    auto_reprice_max_change_percentage: float = 0.10  # Max 10% change requires approval
+    auto_reprice_lookback_days: int = 7
+
+    # Auto Pause Rules
+    auto_pause_enable: bool = True
+    auto_pause_roi_threshold: float = 0.10  # Pause if ROI < 10%
+    auto_pause_lookback_days: int = 7
+    auto_pause_min_data_points: int = 7  # Need at least 7 days of data
+
+    # Auto Asset Switch Rules
+    auto_asset_switch_enable: bool = True
+    auto_asset_switch_ctr_threshold: float = 0.80  # Switch if CTR < 80% of platform average
+    auto_asset_switch_lookback_days: int = 7
+
+    # Platform API Configuration
+    temu_api_base_url: str = "https://api-sg.temu.com"
+    temu_api_timeout: int = 30
+    amazon_sp_api_base_url: str = "https://sellingpartnerapi-na.amazon.com"
+    amazon_sp_api_timeout: int = 30
+    amazon_sp_api_refresh_token: str = ""
+    amazon_sp_api_client_id: str = ""
+    amazon_sp_api_client_secret: str = ""
+    aliexpress_api_base_url: str = "https://api-sg.aliexpress.com/sync"
+    aliexpress_api_timeout: int = 30
+    aliexpress_api_app_key: str = ""
+    aliexpress_api_app_secret: str = ""
+    platform_api_max_retries: int = 3  # Retry count for platform API calls
+
+    # RPA Configuration
+    rpa_enable: bool = True
+    rpa_headless: bool = True
+    rpa_timeout: int = 300000  # 5 minutes
+    rpa_max_retries: int = 3
+    rpa_captcha_service: str = "2captcha"  # or "manual"
+    rpa_captcha_api_key: str = ""
+    temu_rpa_enabled: bool = False
+    temu_rpa_login_url: str = ""
+    temu_rpa_publish_url: str = ""
+    temu_rpa_username: str = ""
+    temu_rpa_password: str = ""
+    rpa_manual_intervention_on_challenge: bool = True
+
 @lru_cache
 def get_settings() -> Settings:
     """Get cached settings instance."""

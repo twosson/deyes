@@ -1,12 +1,40 @@
 <script setup lang="ts">
-import { ReloadOutlined, StarFilled, TrophyOutlined } from '@ant-design/icons-vue'
+import { ReloadOutlined, StarFilled, TrophyOutlined, LineChartOutlined, CheckOutlined, CloseOutlined, ClockCircleOutlined } from '@ant-design/icons-vue'
 import { computed, h, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { message } from 'ant-design-vue'
+import { use } from 'echarts/core'
+import { CanvasRenderer } from 'echarts/renderers'
+import { LineChart, BarChart } from 'echarts/charts'
+import {
+  GridComponent,
+  LegendComponent,
+  TitleComponent,
+  TooltipComponent,
+} from 'echarts/components'
+import VChart from 'vue-echarts'
 
 import { formatCurrency, formatDateTime, formatPercent } from '@/adapters/formatters'
 import { riskDecisionMeta, sourcePlatformLabel } from '@/adapters/statusMeta'
-import { useRecommendationsQuery, useCandidateRecommendationQuery } from '@/queries/useRecommendationsQuery'
+import {
+  useRecommendationsQuery,
+  useCandidateRecommendationQuery,
+  useRecommendationTrendsQuery,
+  useRecommendationsByPlatformQuery,
+  useRecommendationFeedbackStatsQuery,
+} from '@/queries/useRecommendationsQuery'
+import { useCreateFeedbackMutation } from '@/queries/useFeedbackMutation'
 import type { RecommendationItem } from '@/types/recommendations'
+
+use([
+  CanvasRenderer,
+  LineChart,
+  BarChart,
+  TitleComponent,
+  TooltipComponent,
+  LegendComponent,
+  GridComponent,
+])
 
 const router = useRouter()
 
@@ -17,11 +45,26 @@ const filters = ref({
   limit: 20,
 })
 
+const analyticsParams = ref({
+  period: 'day' as 'day' | 'week' | 'month',
+  days: 30,
+  min_score: 60,
+})
+
 const selectedCandidateId = ref<string>()
+const showAnalytics = ref(false)
 
 const recommendationsQuery = useRecommendationsQuery(filters)
 const candidateRecommendationQuery = useCandidateRecommendationQuery(
   computed(() => selectedCandidateId.value ?? ''),
+)
+const createFeedbackMutation = useCreateFeedbackMutation()
+const trendsQuery = useRecommendationTrendsQuery(analyticsParams)
+const platformQuery = useRecommendationsByPlatformQuery(
+  computed(() => ({ min_score: analyticsParams.value.min_score })),
+)
+const feedbackQuery = useRecommendationFeedbackStatsQuery(
+  computed(() => ({ days: analyticsParams.value.days })),
 )
 
 const recommendations = computed(() => recommendationsQuery.data.value?.items ?? [])
@@ -64,6 +107,11 @@ const levelText = (level: string) => {
 const riskTag = (decision?: string | null) =>
   riskDecisionMeta[decision ?? ''] ?? { label: decision ?? '--', color: 'default' }
 const sourceLabel = (source?: string) => sourcePlatformLabel[source ?? ''] ?? source ?? '--'
+const feedbackActionLabel: Record<string, string> = {
+  accepted: '采纳',
+  rejected: '拒绝',
+  ignored: '忽略',
+}
 
 function handleSelectRecommendation(record: RecommendationItem) {
   selectedCandidateId.value = record.candidate_id
@@ -71,11 +119,128 @@ function handleSelectRecommendation(record: RecommendationItem) {
 
 function handleRefresh() {
   recommendationsQuery.refetch()
+  trendsQuery.refetch()
+  platformQuery.refetch()
+  feedbackQuery.refetch()
 }
 
 function handleViewCandidate(candidateId: string) {
   router.push(`/candidates?id=${candidateId}`)
 }
+
+async function handleFeedback(action: 'accepted' | 'rejected' | 'deferred', comment?: string) {
+  if (!selectedCandidateId.value) return
+
+  try {
+    await createFeedbackMutation.mutateAsync({
+      candidateId: selectedCandidateId.value,
+      payload: { action, comment },
+    })
+    message.success('反馈已提交')
+    drawerOpen.value = false
+  } catch (error) {
+    message.error('提交反馈失败')
+  }
+}
+
+const trendChartOption = computed(() => ({
+  tooltip: { trigger: 'axis' },
+  legend: { top: 0 },
+  grid: { left: 32, right: 16, top: 40, bottom: 32, containLabel: true },
+  xAxis: {
+    type: 'category',
+    data: trendsQuery.data.value?.data.map((item) => item.date) ?? [],
+  },
+  yAxis: [
+    {
+      type: 'value',
+      name: '推荐数量',
+      position: 'left',
+    },
+    {
+      type: 'value',
+      name: '平均推荐分',
+      position: 'right',
+      min: 0,
+      max: 100,
+    },
+  ],
+  series: [
+    {
+      name: '推荐数量',
+      type: 'bar',
+      data: trendsQuery.data.value?.data.map((item) => item.count) ?? [],
+      itemStyle: { color: '#1677ff' },
+    },
+    {
+      name: '平均推荐分',
+      type: 'line',
+      yAxisIndex: 1,
+      smooth: true,
+      data: trendsQuery.data.value?.data.map((item) => item.average_score) ?? [],
+      itemStyle: { color: '#52c41a' },
+    },
+  ],
+}))
+
+const platformChartOption = computed(() => ({
+  tooltip: { trigger: 'axis' },
+  legend: { top: 0 },
+  grid: { left: 32, right: 16, top: 40, bottom: 48, containLabel: true },
+  xAxis: {
+    type: 'category',
+    data: platformQuery.data.value?.data.map((item) => sourceLabel(item.platform)) ?? [],
+    axisLabel: { interval: 0, rotate: 20 },
+  },
+  yAxis: [
+    {
+      type: 'value',
+      name: '推荐数量',
+      position: 'left',
+    },
+    {
+      type: 'value',
+      name: '平均推荐分',
+      position: 'right',
+      min: 0,
+      max: 100,
+    },
+  ],
+  series: [
+    {
+      name: '推荐数量',
+      type: 'bar',
+      data: platformQuery.data.value?.data.map((item) => item.count) ?? [],
+      itemStyle: { color: '#722ed1' },
+    },
+    {
+      name: '平均推荐分',
+      type: 'line',
+      yAxisIndex: 1,
+      smooth: true,
+      data: platformQuery.data.value?.data.map((item) => item.average_score) ?? [],
+      itemStyle: { color: '#fa8c16' },
+    },
+  ],
+}))
+
+const feedbackChartOption = computed(() => ({
+  tooltip: { trigger: 'axis' },
+  grid: { left: 32, right: 16, top: 24, bottom: 32, containLabel: true },
+  xAxis: {
+    type: 'category',
+    data: feedbackQuery.data.value?.data.map((item) => feedbackActionLabel[item.action] ?? item.action) ?? [],
+    axisLabel: { interval: 0 },
+  },
+  yAxis: { type: 'value', name: '反馈数量' },
+  series: [
+    {
+      type: 'bar',
+      data: feedbackQuery.data.value?.data.map((item) => item.count) ?? [],
+      itemStyle: { color: '#13c2c2' },
+    },
+  ],
+}))
 
 const columns = [
   {
@@ -142,6 +307,54 @@ const columns = [
           show-icon
           message="基于优先级、利润率、风险和供应商质量的综合评分，为您推荐最有潜力的候选产品。"
         />
+
+        <a-card size="small" title="推荐分析看板">
+          <template #extra>
+            <a-button type="link" :icon="h(LineChartOutlined)" @click="showAnalytics = !showAnalytics">
+              {{ showAnalytics ? '收起分析' : '展开分析' }}
+            </a-button>
+          </template>
+
+          <div v-if="showAnalytics" class="page-stack">
+            <div class="filter-grid">
+              <a-select
+                v-model:value="analyticsParams.period"
+                :options="[
+                  { label: '按日', value: 'day' },
+                  { label: '按周', value: 'week' },
+                  { label: '按月', value: 'month' },
+                ]"
+              />
+              <a-input-number
+                v-model:value="analyticsParams.days"
+                :min="1"
+                :max="365"
+                style="width: 100%"
+                addon-before="回溯天数"
+              />
+              <a-input-number
+                v-model:value="analyticsParams.min_score"
+                :min="0"
+                :max="100"
+                style="width: 100%"
+                addon-before="最低分数"
+              />
+            </div>
+
+            <div class="two-column-grid">
+              <a-card size="small" title="时间趋势分析">
+                <VChart class="chart-container" :option="trendChartOption" autoresize />
+              </a-card>
+              <a-card size="small" title="平台对比分析">
+                <VChart class="chart-container" :option="platformChartOption" autoresize />
+              </a-card>
+            </div>
+
+            <a-card size="small" title="用户反馈统计">
+              <VChart class="chart-container" :option="feedbackChartOption" autoresize />
+            </a-card>
+          </div>
+        </a-card>
 
         <!-- 筛选器 -->
         <div class="filter-grid">
@@ -377,6 +590,35 @@ const columns = [
             </a-descriptions-item>
           </a-descriptions>
         </a-card>
+
+        <!-- 用户反馈 -->
+        <a-card title="您的决策" size="small">
+          <div style="display: flex; gap: 12px; flex-wrap: wrap">
+            <a-button
+              type="primary"
+              :icon="h(CheckOutlined)"
+              :loading="createFeedbackMutation.isPending.value"
+              @click="handleFeedback('accepted')"
+            >
+              接受推荐
+            </a-button>
+            <a-button
+              danger
+              :icon="h(CloseOutlined)"
+              :loading="createFeedbackMutation.isPending.value"
+              @click="handleFeedback('rejected')"
+            >
+              拒绝推荐
+            </a-button>
+            <a-button
+              :icon="h(ClockCircleOutlined)"
+              :loading="createFeedbackMutation.isPending.value"
+              @click="handleFeedback('deferred')"
+            >
+              稍后决策
+            </a-button>
+          </div>
+        </a-card>
       </div>
     </a-drawer>
   </div>
@@ -397,6 +639,17 @@ const columns = [
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 12px;
+}
+
+.two-column-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+.chart-container {
+  width: 100%;
+  min-height: 320px;
 }
 
 .loading-container {

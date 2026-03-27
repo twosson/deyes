@@ -9,6 +9,7 @@ from app.core.enums import CandidateStatus, SourcePlatform
 from app.core.seasonal_calendar import get_seasonal_calendar
 from app.db.models import CandidateProduct, SupplierMatch
 from app.services.demand_validator import DemandValidator
+from app.services.product_scoring_service import ProductScoreInput, ProductScoringService
 from app.services.source_adapter import MockSourceAdapter, SourceAdapter
 from app.services.supplier_matcher import SupplierMatcherService
 
@@ -292,13 +293,9 @@ class ProductSelectorAgent(BaseAgent):
         seasonal_boost: float,
         validation_results: list,
     ) -> list[tuple]:
-        """Sort products by priority score.
+        """按优先级分数排序产品.
 
-        Priority score combines:
-        - seasonal_boost: Seasonal event boost (1.0 - 2.0)
-        - sales_count: Product sales volume (normalized)
-        - rating: Product rating (0 - 5)
-        - competition_density: Market competition (inverse)
+        委托给 ProductScoringService 执行评分逻辑.
 
         Args:
             products: List of ProductData objects
@@ -309,71 +306,43 @@ class ProductSelectorAgent(BaseAgent):
             List of tuples: [(product, priority_score), ...]
             Sorted by priority score (highest first)
         """
-        # Build competition density map from validation results
+        scoring_service = ProductScoringService()
+
+        # 从验证结果构建竞争密度映射
         competition_map = {}
         for result in validation_results:
             competition_map[result.keyword.lower()] = result.competition_density.value
 
         def calculate_priority_score(product) -> float:
-            """Calculate priority score for a product."""
-            score = 0.0
-
-            # 1. Seasonal boost (weight: 40%)
-            # Range: 1.0 - 2.0 → normalized to 0.0 - 1.0
-            seasonal_component = (seasonal_boost - 1.0) * 0.4
-
-            # 2. Sales count (weight: 30%)
-            # Normalize using log scale to handle wide range
-            sales_component = 0.0
-            if product.sales_count and product.sales_count > 0:
-                # Log scale: 1 → 0, 10 → 0.3, 100 → 0.6, 1000 → 0.9, 10000 → 1.0
-                import math
-
-                sales_normalized = min(1.0, math.log10(product.sales_count) / 4.0)
-                sales_component = sales_normalized * 0.3
-
-            # 3. Rating (weight: 20%)
-            # Range: 0 - 5 → normalized to 0.0 - 1.0
-            rating_component = 0.0
-            if product.rating and product.rating > 0:
-                rating_normalized = float(product.rating) / 5.0
-                rating_component = rating_normalized * 0.2
-
-            # 4. Competition density (weight: 10%, inverse)
-            # LOW = 1.0, MEDIUM = 0.5, HIGH = 0.0, UNKNOWN = 0.3
-            competition_component = 0.0
+            """计算产品优先级分数."""
+            # 查找匹配的竞争密度
             competition_density = "unknown"
-
-            # Try to find matching validation result
             for keyword in competition_map:
                 if keyword in product.title.lower():
                     competition_density = competition_map[keyword]
                     break
 
-            competition_scores = {
-                "low": 1.0,
-                "medium": 0.5,
-                "high": 0.0,
-                "unknown": 0.3,
-            }
-            competition_component = competition_scores.get(competition_density, 0.3) * 0.1
-
-            # Total score
-            total_score = (
-                seasonal_component + sales_component + rating_component + competition_component
+            # 委托给服务
+            score_input = ProductScoreInput(
+                title=product.title,
+                sales_count=product.sales_count,
+                rating=product.rating,
+                seasonal_boost=seasonal_boost,
+                competition_density=competition_density,
             )
 
-            return total_score
+            score_result = scoring_service.calculate_priority_score(score_input)
+            return score_result.total_score
 
-        # Calculate scores and sort
+        # 计算分数并排序
         products_with_scores = [
             (product, calculate_priority_score(product)) for product in products
         ]
 
-        # Sort by score (descending)
+        # 按分数降序排序
         products_with_scores.sort(key=lambda x: x[1], reverse=True)
 
-        # Log top 5 products for debugging
+        # 记录 top 5 用于调试
         self.logger.debug(
             "product_priority_scores",
             top_5=[
@@ -387,5 +356,4 @@ class ProductSelectorAgent(BaseAgent):
             ],
         )
 
-        # Return sorted products with scores
         return products_with_scores

@@ -96,6 +96,8 @@ class PricingAnalystAgent(BaseAgent):
                 pricing_result = self.pricing_service.calculate_pricing(
                     supplier_price=selection_result.selected_path.supplier_price,
                     platform_price=candidate.platform_price,
+                    platform=candidate.source_platform.value if candidate.source_platform else None,
+                    category=candidate.category,
                 )
 
                 # Build explanation with supplier selection details

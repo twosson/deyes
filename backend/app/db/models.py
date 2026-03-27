@@ -25,6 +25,7 @@ from app.core.enums import (
     AssetType,
     CandidateStatus,
     ExperimentStatus,
+    FeedbackAction,
     PlatformListingStatus,
     ProductLifecycle,
     ProfitabilityDecision,
@@ -145,6 +146,9 @@ class CandidateProduct(Base, UpdateTimestampMixin):
     content_assets: Mapped[list["ContentAsset"]] = relationship(back_populates="candidate")
     platform_listings: Mapped[list["PlatformListing"]] = relationship(back_populates="candidate")
     experiments: Mapped[list["Experiment"]] = relationship(back_populates="candidate")
+    recommendation_feedbacks: Mapped[list["RecommendationFeedback"]] = relationship(
+        back_populates="candidate"
+    )
 
 
 class SupplierMatch(Base, TimestampMixin):
@@ -264,6 +268,25 @@ class RunEvent(Base, TimestampMixin):
     agent_run: Mapped[Optional["AgentRun"]] = relationship(back_populates="events")
 
 
+class RecommendationFeedback(Base, TimestampMixin):
+    """User feedback on recommendation decisions."""
+
+    __tablename__ = "recommendation_feedback"
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    candidate_product_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("candidate_products.id"), nullable=False, index=True
+    )
+    action: Mapped[FeedbackAction] = mapped_column(
+        SAEnum(FeedbackAction, native_enum=False), nullable=False, index=True
+    )
+    comment: Mapped[Optional[str]] = mapped_column(Text)
+    metadata_: Mapped[Optional[dict]] = mapped_column("metadata", JSON)
+
+    # Relationships
+    candidate: Mapped["CandidateProduct"] = relationship(back_populates="recommendation_feedbacks")
+
+
 # ============================================================================
 # Phase 1 最小中台: 内容资产管理 & 平台发布
 # ============================================================================
@@ -366,6 +389,7 @@ class PlatformListing(Base, UpdateTimestampMixin):
     # 平台商品ID
     platform_listing_id: Mapped[Optional[str]] = mapped_column(String(100), index=True)  # Temu SKU, Amazon ASIN
     platform_url: Mapped[Optional[str]] = mapped_column(Text)
+    idempotency_key: Mapped[Optional[str]] = mapped_column(String(255), index=True)
 
     # 价格和库存
     price: Mapped[Decimal] = mapped_column(DECIMAL(10, 2), nullable=False)
@@ -387,6 +411,17 @@ class PlatformListing(Base, UpdateTimestampMixin):
     # 销售数据（后续回填）
     total_sales: Mapped[int] = mapped_column(Integer, default=0)
     total_revenue: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(12, 2))
+
+    # Auto Action Engine (2026-03-27)
+    approval_required: Mapped[bool] = mapped_column(default=False, index=True)
+    approval_reason: Mapped[Optional[str]] = mapped_column(Text)
+    auto_action_metadata: Mapped[Optional[dict]] = mapped_column(JSON)  # recommendation_score, risk_score, etc.
+    approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    approved_by: Mapped[Optional[str]] = mapped_column(String(100))
+    rejected_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    rejected_by: Mapped[Optional[str]] = mapped_column(String(100))
+    rejection_reason: Mapped[Optional[str]] = mapped_column(Text)
+    last_auto_action_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
     # Relationships
     candidate: Mapped["CandidateProduct"] = relationship(back_populates="platform_listings")

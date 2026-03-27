@@ -1,6 +1,35 @@
 # 核心业务流程详细设计
 
-## 流程一：选品到上架全流程
+> 最后更新: 2026-03-27
+> 版本: v2.0（战略转向：自动化经营流程）
+
+---
+
+## ⚠️ 流程设计原则变更
+
+### 旧流程（推荐分析流）
+
+```
+发现 → 评分 → 推荐 → 人工决策 → 手动反馈
+```
+
+**问题**：人工是瓶颈，系统只是辅助工具
+
+### 新流程（自动执行流）
+
+```
+发现 → 决策 → 自动执行 → 性能反馈 → 自动优化 → 人工审批兜底
+```
+
+**核心变化**：
+1. **PlatformListing 是核心经营实体**（不是 CandidateProduct）
+2. **自动执行优先**（能自动做的绝不让人手动）
+3. **性能数据驱动**（基于真实转化率/ROI自动优化）
+4. **人工审批兜底**（高风险操作需要审批，低风险自动执行）
+
+---
+
+## 流程一：自动化选品到上架全流程
 
 ### 1. 选品流程 (Product Selection Flow)
 
@@ -8,17 +37,21 @@
 graph TD
     A[定时触发/手动触发] --> B[总监Agent: 制定选品策略]
     B --> C[选品Agent: 爬取目标平台热销数据]
-    C --> D[数据存入PostgreSQL + 向量化]
-    D --> E[选品Agent: 在1688搜索货源]
-    E --> F[BGE-M3向量匹配相似商品]
-    F --> G[核价Agent: 计算利润模型]
-    G --> H{利润率 > 30%?}
-    H -->|否| I[记录并跳过]
-    H -->|是| J[风控Agent: 侵权检测]
-    J --> K{风险评分 < 阈值?}
-    K -->|否| I
-    K -->|是| L[加入待处理队列]
-    L --> M[触发图像复刻流程]
+    C --> D[需求验证: Google Trends/Helium 10]
+    D --> E{搜索量 > 500/月?}
+    E -->|否| F[记录并跳过]
+    E -->|是| G[选品Agent: 在1688搜索货源]
+    G --> H[BGE-M3向量匹配相似商品]
+    H --> I[核价Agent: 计算利润模型]
+    I --> J{利润率 > 35%?}
+    J -->|否| F
+    J -->|是| K[风控Agent: 侵权检测]
+    K --> L{风险评分 < 阈值?}
+    L -->|否| F
+    L -->|是| M[推荐服务: 计算推荐分数]
+    M --> N{推荐分数 >= 75?}
+    N -->|否| O[加入低优先级队列]
+    N -->|是| P[自动触发图像生成]
 ```
 
 #### 详细步骤
@@ -37,13 +70,20 @@ graph TD
 - 存储: PostgreSQL + 原始HTML存Odoo filestore
 - 并发: n8n队列，50个并行爬虫
 
-**步骤3: 1688货源匹配**
+**步骤3: 需求验证（新增）**
+- Google Trends 搜索量验证（>500/月）
+- Helium 10 API 增强（可选）
+- 竞争密度评估（<5000 搜索结果）
+- 趋势方向分类（rising/stable/declining）
+- Redis 缓存（24h TTL）
+
+**步骤4: 1688货源匹配**
 - 方法1: 关键词搜索(提取核心词)
 - 方法2: 图像搜索(Qwen2-VL提取特征 → 1688图搜)
 - 方法3: 向量相似度(BGE-M3匹配商品描述)
 - 输出: Top 10候选供应商
 
-**步骤4: 利润计算**
+**步骤5: 利润计算**
 ```python
 利润率 = (目标平台售价 - 1688采购价 - 物流成本 - 平台佣金) / 目标平台售价
 
@@ -53,9 +93,14 @@ graph TD
 - 平台佣金 (5-15%不等)
 - 支付手续费 (1-2%)
 - 退货率 (5-10%)
+
+阈值:
+- 基础阈值: 35%
+- 平台特定: Amazon 40%, Temu 30%, AliExpress 35%
+- 品类特定: Electronics 25%, Jewelry 50%, Home 35%
 ```
 
-**步骤5: 风控检测**
+**步骤6: 风控检测**
 - 侵权检测:
   - 品牌词识别 (Nike, Adidas等)
   - 图像相似度对比(已知侵权库)
@@ -63,7 +108,31 @@ graph TD
 - 合规检测:
   - 禁售品类(武器、药品等)
   - 目标国家法规(如欧盟CE认证)
-- 风险评分: 0-100，>70拒绝
+- 竞争密度风险:
+  - 高竞争 = 80分
+  - 中竞争 = 50分
+  - 低竞争 = 20分
+- 组合风险评分: 合规风险 * 0.6 + 竞争风险 * 0.4
+
+**步骤7: 推荐评分（内部服务）**
+```python
+recommendation_score = (
+    priority_score * 40 +           # 优先级 40% (季节性、销量、评分、竞争)
+    margin_score * 30 +             # 利润率 30%
+    risk_score_inverse * 20 +       # 风险反向 20%
+    supplier_quality * 10           # 供应商质量 10%
+)
+
+推荐等级:
+- HIGH (≥75): 自动触发图像生成
+- MEDIUM (60-74): 加入低优先级队列
+- LOW (<60): 记录并跳过
+```
+
+**关键变化**：
+- ❌ 不再展示推荐页面让人手动选择
+- ✅ 推荐分数 ≥75 自动触发下一步
+- ✅ 推荐服务降级为内部决策引擎
 
 ---
 
@@ -492,3 +561,373 @@ RPA上架 (5分钟/平台):
 - 图像生成: 96套/小时 × 24小时 = 2304套/天
 - 考虑其他环节: 2304 / 1.8 ≈ 1280套/天
 ```
+
+---
+
+## 流程二：自动化经营流程（2026-03-27 新增）
+
+### 核心理念
+
+**从"推荐分析"到"自动执行"**
+
+旧流程：候选 → 推荐分数 → 人工决策 → 手动反馈
+新流程：候选 → 自动上架 → 性能数据 → 自动优化 → 人工审批兜底
+
+### 1. 自动上架流程 (Auto-Publish Flow)
+
+```mermaid
+graph TD
+    A[推荐分数 >= 75] --> B[AutoActionEngine: 创建PlatformListing]
+    B --> C[状态: draft]
+    C --> D{需要审批?}
+    D -->|是| E[状态: pending_approval]
+    E --> F[通知人工审批]
+    F --> G{审批通过?}
+    G -->|否| H[状态: rejected]
+    G -->|是| I[状态: approved]
+    D -->|否| I
+    I --> J[调用平台API上架]
+    J --> K{API成功?}
+    K -->|否| L[RPA备选方案]
+    K -->|是| M[状态: published]
+    L --> M
+    M --> N[记录platform_listing_id]
+    N --> O[启动性能数据采集]
+```
+
+#### 审批边界配置
+
+```python
+# backend/app/core/config.py
+
+AUTO_PUBLISH_RULES = {
+    "require_approval": {
+        "first_time_product": True,      # 首次上架需要审批
+        "high_risk_category": True,      # 高风险品类需要审批
+        "price_above": 100,              # 售价 > $100 需要审批
+        "margin_below": 0.25,            # 利润率 < 25% 需要审批
+    },
+    "auto_execute": {
+        "recommendation_score_above": 75,  # 推荐分数 >= 75 自动执行
+        "risk_score_below": 30,            # 风险分数 < 30 自动执行
+        "margin_above": 0.35,              # 利润率 >= 35% 自动执行
+    }
+}
+```
+
+#### API-first, RPA-second
+
+```python
+# backend/app/services/auto_action_engine.py
+
+async def publish_to_platform(listing: PlatformListing):
+    """自动上架到平台"""
+
+    # 1. 优先使用平台API
+    if listing.platform == "temu":
+        try:
+            result = await temu_api.create_product(listing)
+            return result
+        except APIError as e:
+            logger.warning(f"Temu API failed: {e}, fallback to RPA")
+            # 2. API失败时使用RPA
+            return await rpa_publisher.publish_temu(listing)
+
+    elif listing.platform == "amazon":
+        return await amazon_sp_api.create_product(listing)
+
+    elif listing.platform == "aliexpress":
+        return await aliexpress_api.create_product(listing)
+```
+
+### 2. 性能数据采集流程 (Performance Data Collection)
+
+```mermaid
+graph TD
+    A[定时任务: 每日23:00] --> B[遍历所有published状态的listing]
+    B --> C[调用平台API获取数据]
+    C --> D[解析数据]
+    D --> E[计算转化率/ROI]
+    E --> F[写入ListingPerformanceDaily]
+    F --> G[写入AssetPerformanceDaily]
+    G --> H[触发自动优化检查]
+```
+
+#### 数据采集任务
+
+```python
+# backend/app/workers/tasks_performance.py
+
+@celery_app.task
+async def collect_listing_performance():
+    """采集商品性能数据"""
+
+    listings = await db.query(PlatformListing).filter(
+        PlatformListing.status == "published"
+    ).all()
+
+    for listing in listings:
+        # 调用平台API获取数据
+        data = await platform_api.get_product_stats(
+            platform=listing.platform,
+            product_id=listing.platform_listing_id,
+            date=today
+        )
+
+        # 计算指标
+        conversion_rate = data["orders"] / data["clicks"] if data["clicks"] > 0 else 0
+        roi = (data["gmv"] - listing.cost) / listing.cost if listing.cost > 0 else 0
+
+        # 写入数据库
+        await db.add(ListingPerformanceDaily(
+            listing_id=listing.id,
+            date=today,
+            impressions=data["impressions"],
+            clicks=data["clicks"],
+            orders=data["orders"],
+            gmv=data["gmv"],
+            conversion_rate=conversion_rate,
+            roi=roi
+        ))
+```
+
+### 3. 自动优化流程 (Auto-Optimization Flow)
+
+```mermaid
+graph TD
+    A[性能数据采集完成] --> B[AutoOptimizationEngine: 分析数据]
+    B --> C{ROI < 目标?}
+    C -->|是| D[自动调价: 降价5-10%]
+    C -->|否| E{ROI > 目标?}
+    E -->|是| F[自动调价: 涨价3-5%]
+    E -->|否| G{转化率 < 平均?}
+    G -->|是| H[自动换素材]
+    G -->|否| I{ROI < 阈值 7天?}
+    I -->|是| J[自动暂停]
+    I -->|否| K[继续监控]
+```
+
+#### 自动调价逻辑
+
+```python
+# backend/app/services/auto_optimization_engine.py
+
+async def auto_reprice(listing: PlatformListing):
+    """基于ROI自动调价"""
+
+    # 获取最近7天性能数据
+    perf_data = await db.query(ListingPerformanceDaily).filter(
+        ListingPerformanceDaily.listing_id == listing.id,
+        ListingPerformanceDaily.date >= today - timedelta(days=7)
+    ).all()
+
+    avg_roi = sum(p.roi for p in perf_data) / len(perf_data)
+    target_roi = 0.3  # 目标ROI 30%
+
+    if avg_roi < target_roi * 0.8:  # ROI < 24%
+        # 降价 5-10%
+        new_price = listing.price * 0.92
+        await update_price(listing, new_price, reason="low_roi")
+
+    elif avg_roi > target_roi * 1.2:  # ROI > 36%
+        # 涨价 3-5%
+        new_price = listing.price * 1.04
+        await update_price(listing, new_price, reason="high_roi")
+```
+
+#### 自动换素材逻辑
+
+```python
+async def auto_switch_asset(listing: PlatformListing):
+    """基于转化率自动切换素材"""
+
+    # 获取当前素材性能
+    current_asset_perf = await db.query(AssetPerformanceDaily).filter(
+        AssetPerformanceDaily.asset_id == listing.main_image_id,
+        AssetPerformanceDaily.date >= today - timedelta(days=7)
+    ).all()
+
+    avg_ctr = sum(p.click_rate for p in current_asset_perf) / len(current_asset_perf)
+
+    # 获取平均点击率
+    platform_avg_ctr = await get_platform_avg_ctr(listing.platform, listing.category)
+
+    if avg_ctr < platform_avg_ctr * 0.8:  # 点击率低于平均80%
+        # 切换到备选素材
+        alternative_assets = await db.query(ContentAsset).filter(
+            ContentAsset.candidate_id == listing.candidate_id,
+            ContentAsset.asset_type == "main_image",
+            ContentAsset.id != listing.main_image_id
+        ).all()
+
+        if alternative_assets:
+            best_asset = max(alternative_assets, key=lambda a: a.quality_score)
+            await update_listing_asset(listing, best_asset, reason="low_ctr")
+```
+
+#### 自动暂停逻辑
+
+```python
+async def auto_pause(listing: PlatformListing):
+    """基于ROI自动暂停低效商品"""
+
+    # 获取最近7天性能数据
+    perf_data = await db.query(ListingPerformanceDaily).filter(
+        ListingPerformanceDaily.listing_id == listing.id,
+        ListingPerformanceDaily.date >= today - timedelta(days=7)
+    ).all()
+
+    if len(perf_data) < 7:
+        return  # 数据不足，不暂停
+
+    avg_roi = sum(p.roi for p in perf_data) / len(perf_data)
+    roi_threshold = 0.1  # ROI阈值 10%
+
+    if avg_roi < roi_threshold:
+        # 自动暂停
+        await pause_listing(listing, reason="low_roi_7days")
+
+        # 记录RunEvent
+        await db.add(RunEvent(
+            event_type="auto_pause",
+            entity_type="platform_listing",
+            entity_id=listing.id,
+            metadata={
+                "avg_roi": avg_roi,
+                "threshold": roi_threshold,
+                "reason": "low_roi_7days"
+            }
+        ))
+```
+
+### 4. 人工审批工作台 (Approval Workbench)
+
+**前端UI变更**：
+
+旧UI：`RecommendationsPage.vue`（推荐列表 + 详情抽屉 + 分析看板）
+新UI：`ApprovalWorkbench.vue`（待审批列表 + 审批详情 + 快速审批按钮）
+
+```vue
+<!-- frontend/src/pages/approval/ApprovalWorkbench.vue -->
+
+<template>
+  <div class="approval-workbench">
+    <n-tabs>
+      <n-tab-pane name="pending" tab="待审批">
+        <n-data-table
+          :columns="columns"
+          :data="pendingListings"
+          :pagination="pagination"
+        />
+      </n-tab-pane>
+
+      <n-tab-pane name="history" tab="审批历史">
+        <!-- 审批历史记录 -->
+      </n-tab-pane>
+    </n-tabs>
+
+    <!-- 审批详情抽屉 -->
+    <n-drawer v-model:show="showDetail">
+      <n-drawer-content title="审批详情">
+        <!-- 商品信息、推荐分数、风险评估 -->
+
+        <template #footer>
+          <n-space>
+            <n-button type="success" @click="approve">
+              批准上架
+            </n-button>
+            <n-button type="error" @click="reject">
+              拒绝
+            </n-button>
+            <n-button @click="defer">
+              延后决策
+            </n-button>
+          </n-space>
+        </template>
+      </n-drawer-content>
+    </n-drawer>
+  </div>
+</template>
+```
+
+### 5. 性能监控面板 (Performance Monitoring)
+
+**降级后的数据看板**（不再是主产品）：
+
+```vue
+<!-- frontend/src/pages/monitoring/PerformanceMonitoring.vue -->
+
+<template>
+  <div class="performance-monitoring">
+    <n-grid cols="4" x-gap="12">
+      <!-- KPI卡片 -->
+      <n-gi>
+        <n-statistic label="今日GMV" :value="todayGMV" />
+      </n-gi>
+      <n-gi>
+        <n-statistic label="平均ROI" :value="avgROI" suffix="%" />
+      </n-gi>
+      <n-gi>
+        <n-statistic label="自动执行次数" :value="autoActionCount" />
+      </n-gi>
+      <n-gi>
+        <n-statistic label="待审批数量" :value="pendingApprovalCount" />
+      </n-gi>
+    </n-grid>
+
+    <!-- 异常告警 -->
+    <n-alert v-if="hasAlerts" type="warning" title="异常告警">
+      <ul>
+        <li v-for="alert in alerts" :key="alert.id">
+          {{ alert.message }}
+        </li>
+      </ul>
+    </n-alert>
+
+    <!-- 性能趋势图表 -->
+    <div ref="chartRef" style="height: 400px"></div>
+  </div>
+</template>
+```
+
+---
+
+## 总结：新旧流程对比
+
+### 旧流程（推荐分析流）
+
+```
+1. 候选发现 → CandidateProduct
+2. 推荐评分 → RecommendationService
+3. 推荐页面 → RecommendationsPage（人工浏览）
+4. 手动点击 → "接受/拒绝"按钮
+5. 手动反馈 → RecommendationFeedback
+6. 数据看板 → 时间趋势、平台对比（人工分析）
+```
+
+**问题**：
+- 人工是瓶颈
+- 系统只是辅助工具
+- 无法规模化
+
+### 新流程（自动执行流）
+
+```
+1. 候选发现 → CandidateProduct
+2. 推荐评分 → RecommendationService（内部服务）
+3. 自动上架 → AutoActionEngine → PlatformListing
+4. 性能采集 → ListingPerformanceDaily
+5. 自动优化 → AutoOptimizationEngine（自动调价、换素材、暂停）
+6. 人工审批 → ApprovalWorkbench（仅高风险操作）
+7. 性能监控 → PerformanceMonitoring（异常告警）
+```
+
+**优势**：
+- 自动执行，无需人工干预
+- 性能数据驱动，持续优化
+- 可规模化到数千SKU
+
+---
+
+**文档维护**: 本文档应在业务流程变更后同步更新
+

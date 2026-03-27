@@ -115,3 +115,40 @@ export interface RecommendationStatsOverview {
   }>
 }
 
+export interface RecommendationTrendDataPoint {
+  date: string
+  count: number
+  average_score: number
+}
+
+export interface RecommendationTrendsResponse {
+  period: string
+  days: number
+  min_score: number
+  data: RecommendationTrendDataPoint[]
+}
+
+export interface PlatformComparisonDataPoint {
+  platform: string
+  count: number
+  average_score: number
+  high_quality_count: number
+  high_quality_percentage: number
+}
+
+export interface PlatformComparisonResponse {
+  min_score: number
+  data: PlatformComparisonDataPoint[]
+}
+
+export interface FeedbackStatsDataPoint {
+  action: string
+  count: number
+}
+
+export interface FeedbackStatsResponse {
+  days: number
+  total_feedback: number
+  data: FeedbackStatsDataPoint[]
+}
+

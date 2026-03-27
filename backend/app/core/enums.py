@@ -82,6 +82,9 @@ class AssetType(str, Enum):
 
 class PlatformListingStatus(str, Enum):
     """Platform listing status."""
+    DRAFT = "draft"  # 草稿
+    PENDING_APPROVAL = "pending_approval"  # 待审批
+    APPROVED = "approved"  # 已审批
     PENDING = "pending"  # 待上架
     PUBLISHING = "publishing"  # 上架中
     ACTIVE = "active"  # 已上架
@@ -89,12 +92,16 @@ class PlatformListingStatus(str, Enum):
     OUT_OF_STOCK = "out_of_stock"  # 缺货
     REJECTED = "rejected"  # 被拒绝
     DELISTED = "delisted"  # 已下架
+    FALLBACK_QUEUED = "fallback_queued"  # RPA fallback queued
+    FALLBACK_RUNNING = "fallback_running"  # RPA fallback running
+    MANUAL_INTERVENTION_REQUIRED = "manual_intervention_required"  # Manual intervention required
 
 
 class TargetPlatform(str, Enum):
     """Target platform for selling."""
     TEMU = "temu"
     AMAZON = "amazon"
+    ALIEXPRESS = "aliexpress"
     OZON = "ozon"
     WILDBERRIES = "wildberries"
     SHOPEE = "shopee"
@@ -112,3 +119,10 @@ class ExperimentStatus(str, Enum):
     ACTIVE = "active"
     COMPLETED = "completed"
     ARCHIVED = "archived"
+
+
+class FeedbackAction(str, Enum):
+    """User feedback action on recommendations."""
+    ACCEPTED = "accepted"  # 接受推荐
+    REJECTED = "rejected"  # 拒绝推荐
+    DEFERRED = "deferred"  # 延后决策

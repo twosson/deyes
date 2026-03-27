@@ -513,6 +513,35 @@ class DemandValidator:
         }
         return region_map.get(region_upper, region_upper)
 
+    def _region_to_marketplace(self, region: str) -> str:
+        """Convert region code to Amazon marketplace code.
+
+        Args:
+            region: Region code (e.g., "US", "UK", "JP")
+
+        Returns:
+            Amazon marketplace code
+        """
+        if not region:
+            return "US"
+
+        region_upper = region.upper()
+        marketplace_map = {
+            "US": "US",
+            "UK": "UK",
+            "GB": "UK",
+            "JP": "JP",
+            "DE": "DE",
+            "FR": "FR",
+            "ES": "ES",
+            "IT": "IT",
+            "BR": "BR",
+            "MX": "MX",
+            "CA": "CA",
+            "AU": "AU",
+        }
+        return marketplace_map.get(region_upper, "US")
+
     def _estimate_search_volume_from_interest(self, avg_interest: float) -> int:
         """Estimate monthly search volume from Google Trends relative interest.
 
@@ -562,27 +591,95 @@ class DemandValidator:
     ) -> tuple[Optional[int], Optional[Decimal], TrendDirection]:
         """Get trends from Helium 10 API.
 
-        TODO: Implement Helium 10 API integration
-        - Use Helium 10 Magnet API for keyword data
-        - Extract search volume, competition, trend
-        - Requires paid API key ($97/month)
+        Uses Helium 10 Magnet API for keyword data including:
+        - Monthly search volume
+        - Competition score
+        - Trend direction and growth rate
 
-        For now, return mock data to unblock development.
+        Falls back to pytrends if Helium 10 API fails or returns no data.
+
+        Args:
+            keyword: Search keyword
+            region: Target region (e.g., "US", "UK", "JP")
+
+        Returns:
+            Tuple of (search_volume, trend_growth_rate, trend_direction)
         """
-        logger.warning(
-            "helium10_not_implemented",
-            keyword=keyword,
-            region=region,
-            returning="mock_data",
-        )
+        from app.clients.helium10 import Helium10Client
 
-        # Mock data for development
-        # TODO: Replace with real Helium 10 API implementation
-        search_volume = 2000  # Mock: above threshold
-        trend_growth_rate = Decimal("0.25")  # Mock: 25% growth
-        trend_direction = TrendDirection.RISING
+        try:
+            # Initialize Helium 10 client
+            client = Helium10Client(
+                api_key=self.helium10_api_key,
+                redis_client=self.redis_client,
+                cache_ttl_seconds=self.cache_ttl_seconds,
+                enable_cache=self.enable_cache,
+            )
 
-        return search_volume, trend_growth_rate, trend_direction
+            # Convert region to marketplace code
+            marketplace = self._region_to_marketplace(region)
+
+            # Get keyword data from Helium 10
+            keyword_data = await client.get_keyword_data(
+                keyword=keyword,
+                marketplace=marketplace,
+            )
+
+            # Close HTTP client
+            await client.close()
+
+            if not keyword_data:
+                logger.warning(
+                    "helium10_no_data",
+                    keyword=keyword,
+                    region=region,
+                    marketplace=marketplace,
+                    fallback="pytrends",
+                )
+                # Fallback to pytrends
+                return await self._get_trends_from_pytrends(keyword, region)
+
+            # Extract data from Helium 10 response
+            search_volume = keyword_data.get("search_volume", 0)
+            trend_growth_rate_float = keyword_data.get("trend_growth_rate", 0.0)
+            trend_direction_str = keyword_data.get("trend_direction", "stable")
+
+            # Convert to expected types
+            trend_growth_rate = Decimal(str(trend_growth_rate_float))
+
+            # Map trend direction string to enum
+            trend_direction_map = {
+                "rising": TrendDirection.RISING,
+                "stable": TrendDirection.STABLE,
+                "declining": TrendDirection.DECLINING,
+            }
+            trend_direction = trend_direction_map.get(
+                trend_direction_str.lower(),
+                TrendDirection.STABLE,
+            )
+
+            logger.info(
+                "helium10_trends_fetched",
+                keyword=keyword,
+                region=region,
+                marketplace=marketplace,
+                search_volume=search_volume,
+                trend_growth_rate=float(trend_growth_rate),
+                trend_direction=trend_direction.value,
+            )
+
+            return search_volume, trend_growth_rate, trend_direction
+
+        except Exception as e:
+            logger.warning(
+                "helium10_fetch_failed",
+                keyword=keyword,
+                region=region,
+                error=str(e),
+                fallback="pytrends",
+            )
+            # Fallback to pytrends
+            return await self._get_trends_from_pytrends(keyword, region)
 
     async def _assess_competition_density(
         self,

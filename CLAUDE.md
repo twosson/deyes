@@ -20,38 +20,47 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### 📚 必读文档（按优先级）
 
-1. **[系统架构 v4.0](docs/architecture/system-architecture-v4.md)** ⭐⭐⭐⭐⭐
+1. **[项目状态报告](docs/PROJECT_STATUS.md)** ⭐⭐⭐⭐⭐
+   - **最新项目状态总览**（2026-03-27 更新）
+   - 已完成模块、待完成模块、最新功能交付
+   - 下一步计划、关键指标监控
+   - **这是了解当前项目状态的首选文档**
+
+2. **[系统架构 v4.0](docs/architecture/system-architecture-v4.md)** ⭐⭐⭐⭐⭐
    - 完整技术栈和架构设计
    - GPU资源分配方案
    - 性能指标和成本分析
-   - **这是最重要的文档，包含所有架构决策**
 
-2. **[硬件验证报告](docs/architecture/hardware-validation-8x4090.md)** ⭐⭐⭐⭐
+3. **[硬件验证报告](docs/architecture/hardware-validation-8x4090.md)** ⭐⭐⭐⭐
    - 8x4090 性能验证
    - 显存计算和GPU分配
    - 配套硬件采购清单
 
-3. **[统一部署指南](DEPLOYMENT.md)** ⭐⭐⭐⭐⭐
+4. **[统一部署指南](DEPLOYMENT.md)** ⭐⭐⭐⭐⭐
    - 当前仓库唯一部署说明
    - 前后端、数据库、AI 服务统一部署
    - 服务验证与故障排查
 
-4. **[ComfyUI 完整部署指南](docs/deployment/comfyui-deployment-guide.md)** ⭐⭐⭐⭐
+5. **[ComfyUI 完整部署指南](docs/deployment/comfyui-deployment-guide.md)** ⭐⭐⭐⭐
    - ComfyUI 图像生成服务专项部署
    - 模型下载、工作流配置与专项排障
 
-5. **[Qwen3.5 vs DeepSeek 对比](docs/architecture/qwen3.5-vs-deepseek-ecommerce-analysis.md)** ⭐⭐⭐
-   - 模型选型分析
-   - 电商场景适配性对比
+6. **[产品选品优化 v1](docs/architecture/product-selection-optimization-v1.md)** ⭐⭐⭐⭐
+   - 需求验证优先策略
+   - Helium 10 集成、季节性日历、动态关键词生成
+   - 已完成功能详细说明
 
 ### 📋 业务文档
 
 - **[Agent定义](docs/agents/agent-definitions.md)** - 24个数字员工岗位定义
 - **[核心业务流程](docs/workflows/core-business-flows.md)** - 业务流程设计
+- **[推荐服务文档](docs/services/recommendation-service.md)** - 推荐评分算法、API 使用
 
-### 🗑️ 归档文档
+### 📅 路线图文档
 
-以下文档已过时，原则上不再保留多份旧文档；当前仅保留必要主文档并持续清理历史材料。
+- **[路线图总览](docs/roadmap/roadmap-index.md)** - Stage 1-6 完整规划
+- **[产品路线图 2026](docs/roadmap/product-roadmap-2026.md)** - 产品战略和阶段目标
+- **[研发路线图 2026](docs/roadmap/engineering-roadmap-2026.md)** - 技术架构和实施计划
 
 ---
 

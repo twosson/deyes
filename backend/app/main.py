@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import (
     routes_agent_runs,
+    routes_auto_actions,
     routes_candidates,
     routes_content_assets,
     routes_experiments,
@@ -63,6 +64,9 @@ app.include_router(routes_performance.router, prefix=settings.api_prefix, tags=[
 
 # Recommendations
 app.include_router(routes_recommendations.router, prefix=settings.api_prefix, tags=["recommendations"])
+
+# Auto Actions (2026-03-27)
+app.include_router(routes_auto_actions.router, prefix=settings.api_prefix, tags=["auto-actions"])
 
 
 @app.get("/")

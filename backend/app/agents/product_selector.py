@@ -82,6 +82,7 @@ class ProductSelectorAgent(BaseAgent):
             demand_discovery_payload = None
             validation_results = []
             validated_keywords = keywords
+            skipped_reason = None
 
             # Demand-first keyword discovery
             if self.require_demand_discovery:
@@ -113,6 +114,7 @@ class ProductSelectorAgent(BaseAgent):
                 )
 
                 if not validated_keywords:
+                    skipped_reason = "no_validated_keywords_available"
                     self.logger.warning(
                         "no_validated_keywords_available",
                         strategy_run_id=str(context.strategy_run_id),
@@ -125,7 +127,7 @@ class ProductSelectorAgent(BaseAgent):
                             "candidate_ids": [],
                             "count": 0,
                             "demand_discovery": demand_discovery_payload,
-                            "skipped_reason": "no_validated_keywords_available",
+                            "skipped_reason": skipped_reason,
                         },
                     )
 
@@ -214,6 +216,13 @@ class ProductSelectorAgent(BaseAgent):
                     normalized_attributes["priority_score"] = round(priority_score, 4)
                     normalized_attributes["priority_rank"] = rank
 
+                # Build demand discovery metadata
+                demand_metadata = None
+                if demand_discovery_payload:
+                    demand_metadata = {**demand_discovery_payload}
+                    if skipped_reason:
+                        demand_metadata["skipped_reason"] = skipped_reason
+
                 candidate = CandidateProduct(
                     id=uuid4(),
                     strategy_run_id=context.strategy_run_id,
@@ -230,6 +239,7 @@ class ProductSelectorAgent(BaseAgent):
                     main_image_url=product.main_image_url,
                     raw_payload=product.raw_payload,
                     normalized_attributes=normalized_attributes,
+                    demand_discovery_metadata=demand_metadata,
                     status=CandidateStatus.DISCOVERED,
                 )
                 context.db.add(candidate)

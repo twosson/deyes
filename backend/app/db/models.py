@@ -17,7 +17,7 @@ from sqlalchemy import (
     String,
     Text,
 )
-from sqlalchemy.dialects.postgresql import UUID as PGUUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.enums import (
@@ -132,6 +132,9 @@ class CandidateProduct(Base, UpdateTimestampMixin):
     lifecycle_status: Mapped[Optional[ProductLifecycle]] = mapped_column(
         SAEnum(ProductLifecycle, native_enum=False), default=ProductLifecycle.DRAFT, index=True
     )  # 生命周期状态
+
+    # Demand discovery metadata (2026-03-28)
+    demand_discovery_metadata: Mapped[Optional[dict]] = mapped_column(JSONB)  # discovery_mode, fallback_used, degraded, validated_keywords, rejected_keywords, skipped_reason
 
     # Relationships
     strategy_run: Mapped["StrategyRun"] = relationship(back_populates="candidates")

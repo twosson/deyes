@@ -138,6 +138,12 @@ def generate_trending_keywords(
     async def run_generation():
         results = []
         settings = get_settings()
+        triggered_categories: list[str] = []
+        triggered_selection_task_ids: list[str] = []
+        trigger_success_count = 0
+        trigger_skip_count = 0
+        trigger_failure_count = 0
+
         for category in categories:
             result = await _generate_keywords_for_category(
                 category=category,
@@ -145,10 +151,14 @@ def generate_trending_keywords(
                 limit=limit,
             )
 
-            if (
-                settings.keyword_generation_auto_trigger_selection
-                and result.get("success")
-            ):
+            auto_trigger_audit = {
+                "status": "disabled",
+                "reason": "auto_trigger_disabled",
+                "selection_task_id": None,
+                "keywords_count": 0,
+            }
+
+            if settings.keyword_generation_auto_trigger_selection and result.get("success"):
                 auto_keywords: list[str] = []
                 seen: set[str] = set()
 
@@ -164,13 +174,72 @@ def generate_trending_keywords(
                         auto_keywords.append(keyword)
 
                 if auto_keywords:
-                    trigger_keyword_based_selection.delay(
+                    try:
+                        selection_task = trigger_keyword_based_selection.delay(
+                            category=category,
+                            keywords=auto_keywords,
+                            region=region,
+                            max_candidates=limit,
+                        )
+                        selection_task_id = str(selection_task.id)
+                        triggered_categories.append(category)
+                        triggered_selection_task_ids.append(selection_task_id)
+                        trigger_success_count += 1
+                        auto_trigger_audit = {
+                            "status": "triggered",
+                            "reason": None,
+                            "selection_task_id": selection_task_id,
+                            "keywords_count": len(auto_keywords),
+                        }
+                        logger.info(
+                            "selection_task_triggered",
+                            category=category,
+                            keywords_count=len(auto_keywords),
+                            selection_task_id=selection_task_id,
+                        )
+                    except Exception as exc:
+                        trigger_failure_count += 1
+                        auto_trigger_audit = {
+                            "status": "failed",
+                            "reason": "trigger_dispatch_failed",
+                            "selection_task_id": None,
+                            "keywords_count": len(auto_keywords),
+                            "error": str(exc),
+                        }
+                        logger.error(
+                            "selection_task_trigger_failed",
+                            category=category,
+                            keywords_count=len(auto_keywords),
+                            error=str(exc),
+                        )
+                else:
+                    trigger_skip_count += 1
+                    auto_trigger_audit = {
+                        "status": "skipped",
+                        "reason": "no_keywords_after_deduplication",
+                        "selection_task_id": None,
+                        "keywords_count": 0,
+                    }
+                    logger.info(
+                        "selection_task_skipped",
                         category=category,
-                        keywords=auto_keywords,
-                        region=region,
-                        max_candidates=limit,
+                        reason="no_keywords_after_deduplication",
                     )
+            elif settings.keyword_generation_auto_trigger_selection and not result.get("success"):
+                trigger_skip_count += 1
+                auto_trigger_audit = {
+                    "status": "skipped",
+                    "reason": "keyword_generation_failed",
+                    "selection_task_id": None,
+                    "keywords_count": 0,
+                }
+                logger.info(
+                    "selection_task_skipped",
+                    category=category,
+                    reason="keyword_generation_failed",
+                )
 
+            result["auto_trigger"] = auto_trigger_audit
             results.append(result)
 
         return {
@@ -179,6 +248,11 @@ def generate_trending_keywords(
             "total_categories": len(categories),
             "successful_categories": sum(1 for r in results if r["success"]),
             "failed_categories": sum(1 for r in results if not r["success"]),
+            "triggered_categories": triggered_categories,
+            "triggered_selection_task_ids": triggered_selection_task_ids,
+            "trigger_success_count": trigger_success_count,
+            "trigger_skip_count": trigger_skip_count,
+            "trigger_failure_count": trigger_failure_count,
         }
 
     try:

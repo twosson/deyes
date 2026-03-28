@@ -442,6 +442,41 @@ class TestDemandDiscoveryService:
         assert mock_demand_validator.validate_batch.call_args_list[-1].kwargs["region"] == "DE"
 
     @pytest.mark.asyncio
+    async def test_platform_passed_to_validator(
+        self,
+        demand_discovery_service,
+        mock_demand_validator,
+    ):
+        """Test platform is propagated to validator."""
+        mock_demand_validator.validate_batch.return_value = [
+            DemandValidationResult(
+                keyword="wireless earbuds",
+                search_volume=5000,
+                competition_density=CompetitionDensity.LOW,
+                trend_direction=TrendDirection.RISING,
+                trend_growth_rate=None,
+                passed=True,
+                platform="amazon",
+            ),
+        ]
+
+        result = await demand_discovery_service.discover_keywords(
+            category="electronics",
+            keywords=["wireless earbuds"],
+            region="US",
+            platform="amazon",
+            max_keywords=10,
+        )
+
+        assert result.discovery_mode == "user"
+        mock_demand_validator.validate_batch.assert_called_once_with(
+            keywords=["wireless earbuds"],
+            category="electronics",
+            region="US",
+            platform="amazon",
+        )
+
+    @pytest.mark.asyncio
     async def test_default_region_used_when_region_missing(
         self,
         demand_discovery_service,
@@ -472,4 +507,5 @@ class TestDemandDiscoveryService:
             keywords=["wireless earbuds"],
             category="electronics",
             region="US",
+            platform=None,
         )

@@ -67,25 +67,28 @@ class DemandValidationResult:
     # Category-specific context (2026-03-28)
     category: Optional[str] = None
 
+    # Platform-specific context (2026-03-28)
+    platform: Optional[str] = None
+
     def __post_init__(self):
-        """Calculate validation decision with region and category-specific thresholds."""
+        """Calculate validation decision with region, category, and platform-specific thresholds."""
         if self.rejection_reasons is None:
             self.rejection_reasons = []
 
-        # Region and category-specific thresholds
-        min_search_volume = self._get_min_search_volume(self.region, self.category)
-        max_competition_density = self._get_max_competition_density(self.region, self.category)
+        # Region, category, and platform-specific thresholds
+        min_search_volume = self._get_min_search_volume(self.region, self.category, self.platform)
+        max_competition_density = self._get_max_competition_density(self.region, self.category, self.platform)
 
         # Check search volume
         if self.search_volume is not None and self.search_volume < min_search_volume:
             self.rejection_reasons.append(
-                f"Search volume too low: {self.search_volume} < {min_search_volume} (region: {self.region or 'US'}, category: {self.category or 'general'})"
+                f"Search volume too low: {self.search_volume} < {min_search_volume} (region: {self.region or 'US'}, category: {self.category or 'general'}, platform: {self.platform or 'general'})"
             )
 
         # Check competition density
         if self._is_competition_too_high(self.competition_density, max_competition_density):
             self.rejection_reasons.append(
-                f"Competition density too high: {self.competition_density.value} (max: {max_competition_density.value}, region: {self.region or 'US'}, category: {self.category or 'general'})"
+                f"Competition density too high: {self.competition_density.value} (max: {max_competition_density.value}, region: {self.region or 'US'}, category: {self.category or 'general'}, platform: {self.platform or 'general'})"
             )
 
         # Check trend direction
@@ -95,20 +98,17 @@ class DemandValidationResult:
         # Passed if no rejection reasons
         self.passed = len(self.rejection_reasons) == 0
 
-    def _get_min_search_volume(self, region: Optional[str], category: Optional[str]) -> int:
-        """Get minimum search volume threshold for region and category.
-
-        Category multipliers (applied to region baseline):
-        - Electronics: 0.5x (lower barrier, fast-moving)
-        - Fashion: 0.7x (moderate barrier)
-        - Home: 0.8x (moderate barrier)
-        - Beauty: 0.9x (higher barrier)
-        - Jewelry: 1.5x (much higher barrier, niche)
-        - Sports: 0.8x (moderate barrier)
-        """
+    def _get_min_search_volume(
+        self,
+        region: Optional[str],
+        category: Optional[str],
+        platform: Optional[str],
+    ) -> int:
+        """Get minimum search volume threshold for region, category, and platform."""
         region_baseline = self._get_region_baseline_search_volume(region)
         category_multiplier = self._get_category_search_volume_multiplier(category)
-        return int(region_baseline * category_multiplier)
+        platform_multiplier = self._get_platform_search_volume_multiplier(platform)
+        return int(region_baseline * category_multiplier * platform_multiplier)
 
     def _get_region_baseline_search_volume(self, region: Optional[str]) -> int:
         """Get baseline search volume threshold for region."""
@@ -147,24 +147,50 @@ class DemandValidationResult:
         }
         return multipliers.get(category_lower, 1.0)
 
-    def _get_max_competition_density(self, region: Optional[str], category: Optional[str]) -> CompetitionDensity:
-        """Get maximum allowed competition density for region and category.
+    def _get_platform_search_volume_multiplier(self, platform: Optional[str]) -> float:
+        """Get search volume multiplier for platform.
 
-        Category-specific competition tolerance:
-        - Electronics: MEDIUM (high volume compensates)
-        - Fashion: MEDIUM (trendy, high turnover)
-        - Jewelry: LOW (niche, avoid red ocean)
-        - Beauty: LOW (brand-sensitive)
-        - Home: MEDIUM (stable demand)
-        - Sports: MEDIUM (seasonal but predictable)
+        Platform demand strictness:
+        - Amazon: 1.3x (high fees, high competition, need stronger demand)
+        - Rakuten: 1.2x (higher fees)
+        - Temu: 0.9x (price-sensitive, fast-moving)
+        - AliExpress: 1.0x (baseline)
+        - Ozon / Mercado Libre: 1.0x (baseline)
+        """
+        if not platform:
+            return 1.0
+
+        platform_lower = platform.lower().strip()
+        multipliers = {
+            "amazon": 1.3,
+            "rakuten": 1.2,
+            "temu": 0.9,
+            "aliexpress": 1.0,
+            "ozon": 1.0,
+            "mercado_libre": 1.0,
+            "alibaba_1688": 1.0,
+        }
+        return multipliers.get(platform_lower, 1.0)
+
+    def _get_max_competition_density(
+        self,
+        region: Optional[str],
+        category: Optional[str],
+        platform: Optional[str],
+    ) -> CompetitionDensity:
+        """Get maximum allowed competition density for region, category, and platform.
+
+        Platform competition tolerance:
+        - Amazon / Rakuten: LOW (avoid high-competition markets)
+        - Temu / AliExpress / Ozon / Mercado Libre: MEDIUM
         """
         region_upper = (region or "US").upper()
 
         # Region baseline
         if region_upper in {"CN"}:
-            region_baseline = CompetitionDensity.LOW
+            threshold = CompetitionDensity.LOW
         else:
-            region_baseline = CompetitionDensity.MEDIUM
+            threshold = CompetitionDensity.MEDIUM
 
         # Category override
         if category:
@@ -174,9 +200,39 @@ class DemandValidationResult:
                 "beauty": CompetitionDensity.LOW,
             }
             if category_lower in category_overrides:
-                return category_overrides[category_lower]
+                threshold = self._stricter_competition_density(
+                    threshold,
+                    category_overrides[category_lower],
+                )
 
-        return region_baseline
+        # Platform override
+        if platform:
+            platform_lower = platform.lower().strip()
+            platform_overrides = {
+                "amazon": CompetitionDensity.LOW,
+                "rakuten": CompetitionDensity.LOW,
+            }
+            if platform_lower in platform_overrides:
+                threshold = self._stricter_competition_density(
+                    threshold,
+                    platform_overrides[platform_lower],
+                )
+
+        return threshold
+
+    def _stricter_competition_density(
+        self,
+        first: CompetitionDensity,
+        second: CompetitionDensity,
+    ) -> CompetitionDensity:
+        """Return the stricter of two competition thresholds."""
+        density_order = {
+            CompetitionDensity.LOW: 1,
+            CompetitionDensity.MEDIUM: 2,
+            CompetitionDensity.HIGH: 3,
+            CompetitionDensity.UNKNOWN: 4,
+        }
+        return first if density_order[first] <= density_order[second] else second
 
     def _is_competition_too_high(
         self,
@@ -268,6 +324,7 @@ class DemandValidator:
         keyword: str,
         category: Optional[str] = None,
         region: Optional[str] = "US",
+        platform: Optional[str] = None,
     ) -> DemandValidationResult:
         """Validate demand for a keyword.
 
@@ -292,13 +349,14 @@ class DemandValidator:
 
         # Step 1: Check cache
         if self.enable_cache:
-            cached_result = await self._get_from_cache(keyword, region, category)
+            cached_result = await self._get_from_cache(keyword, region, category, platform)
             if cached_result:
                 logger.info(
                     "demand_validation_cache_hit",
                     keyword=keyword,
                     region=region,
                     category=category,
+                    platform=platform,
                 )
                 return cached_result
 
@@ -331,11 +389,12 @@ class DemandValidator:
             lead_time_days=lead_time_days,
             region=region,
             category=category,
+            platform=platform,
         )
 
         # Step 5: Cache result
         if self.enable_cache:
-            await self._save_to_cache(keyword, region, result, category)
+            await self._save_to_cache(keyword, region, result, category, platform)
 
         logger.info(
             "demand_validation_completed",
@@ -354,6 +413,7 @@ class DemandValidator:
         keyword: str,
         region: str,
         category: Optional[str] = None,
+        platform: Optional[str] = None,
     ) -> Optional[DemandValidationResult]:
         """Get validation result from Redis cache.
 
@@ -361,6 +421,7 @@ class DemandValidator:
             keyword: Search keyword
             region: Target region
             category: Product category
+            platform: Target platform
 
         Returns:
             Cached DemandValidationResult or None if not found
@@ -369,7 +430,7 @@ class DemandValidator:
             self.redis_client = RedisClient()
 
         try:
-            cache_key = self._build_cache_key(keyword, region, category)
+            cache_key = self._build_cache_key(keyword, region, category, platform)
             cached_json = await self.redis_client.get(cache_key)
 
             if not cached_json:
@@ -390,6 +451,7 @@ class DemandValidator:
                 lead_time_days=cached_data.get("lead_time_days"),
                 region=region,
                 category=category,
+                platform=platform,
             )
 
             return result
@@ -400,6 +462,7 @@ class DemandValidator:
                 keyword=keyword,
                 region=region,
                 category=category,
+                platform=platform,
                 error=str(e),
             )
             return None
@@ -410,6 +473,7 @@ class DemandValidator:
         region: str,
         result: DemandValidationResult,
         category: Optional[str] = None,
+        platform: Optional[str] = None,
     ) -> None:
         """Save validation result to Redis cache.
 
@@ -418,12 +482,13 @@ class DemandValidator:
             region: Target region
             result: Validation result to cache
             category: Product category
+            platform: Target platform
         """
         if not self.redis_client:
             self.redis_client = RedisClient()
 
         try:
-            cache_key = self._build_cache_key(keyword, region, category)
+            cache_key = self._build_cache_key(keyword, region, category, platform)
             result_dict = result.to_dict()
 
             # Serialize to JSON
@@ -441,6 +506,7 @@ class DemandValidator:
                 keyword=keyword,
                 region=region,
                 category=category,
+                platform=platform,
                 cache_key=cache_key,
                 ttl_seconds=self.cache_ttl_seconds,
             )
@@ -451,19 +517,27 @@ class DemandValidator:
                 keyword=keyword,
                 region=region,
                 category=category,
+                platform=platform,
                 error=str(e),
             )
 
-    def _build_cache_key(self, keyword: str, region: str, category: Optional[str] = None) -> str:
+    def _build_cache_key(
+        self,
+        keyword: str,
+        region: str,
+        category: Optional[str] = None,
+        platform: Optional[str] = None,
+    ) -> str:
         """Build Redis cache key for demand validation.
 
         Uses MD5 hash of keyword to handle special characters and long keywords.
-        Includes category to avoid cross-category cache pollution.
+        Includes category and platform to avoid cross-context cache pollution.
 
         Args:
             keyword: Search keyword
             region: Target region
             category: Product category
+            platform: Target platform
 
         Returns:
             Cache key string
@@ -471,7 +545,8 @@ class DemandValidator:
         # Use MD5 hash to handle special characters and long keywords
         keyword_hash = hashlib.md5(keyword.encode("utf-8")).hexdigest()
         category_suffix = f":{category}" if category else ""
-        return f"demand_validation:{keyword_hash}:{region}{category_suffix}"
+        platform_suffix = f":{platform}" if platform else ""
+        return f"demand_validation:{keyword_hash}:{region}{category_suffix}{platform_suffix}"
 
     async def _get_search_trends(
         self,
@@ -1007,6 +1082,7 @@ class DemandValidator:
         keywords: list[str],
         category: Optional[str] = None,
         region: Optional[str] = "US",
+        platform: Optional[str] = None,
     ) -> list[DemandValidationResult]:
         """Validate demand for multiple keywords in batch.
 
@@ -1014,6 +1090,7 @@ class DemandValidator:
             keywords: List of keywords to validate
             category: Product category (optional)
             region: Target region (default: "US")
+            platform: Target platform (optional)
 
         Returns:
             List of DemandValidationResult
@@ -1024,6 +1101,7 @@ class DemandValidator:
                 keyword=keyword,
                 category=category,
                 region=region,
+                platform=platform,
             )
             results.append(result)
 

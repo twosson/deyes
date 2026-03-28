@@ -94,6 +94,7 @@ class DemandDiscoveryService:
         category: Optional[str] = None,
         keywords: Optional[list[str]] = None,
         region: Optional[str] = None,
+        platform: Optional[str] = None,
         allow_fallback: bool = True,
         max_keywords: int = 10,
     ) -> DemandDiscoveryResult:
@@ -119,6 +120,7 @@ class DemandDiscoveryService:
                 source="user",
                 category=category,
                 region=normalized_region,
+                platform=platform,
                 max_keywords=max_keywords,
             )
             if user_result.validated_keywords:
@@ -130,6 +132,7 @@ class DemandDiscoveryService:
             generated_result = await self._discover_from_generated_keywords(
                 category=category,
                 region=normalized_region,
+                platform=platform,
                 max_keywords=max_keywords,
             )
             if generated_result.validated_keywords:
@@ -147,6 +150,7 @@ class DemandDiscoveryService:
             fallback_result = await self._discover_from_fallback_seeds(
                 category=category,
                 region=normalized_region,
+                platform=platform,
                 max_keywords=max_keywords,
             )
             return DemandDiscoveryResult(
@@ -177,6 +181,7 @@ class DemandDiscoveryService:
         *,
         category: Optional[str],
         region: str,
+        platform: Optional[str],
         max_keywords: int,
     ) -> DemandDiscoveryResult:
         """Discover keywords by generating real-time selection keywords."""
@@ -227,6 +232,7 @@ class DemandDiscoveryService:
             source="generated",
             category=category,
             region=region,
+            platform=platform,
             max_keywords=max_keywords,
             discovery_mode="generated",
         )
@@ -236,6 +242,7 @@ class DemandDiscoveryService:
         *,
         category: Optional[str],
         region: str,
+        platform: Optional[str],
         max_keywords: int,
     ) -> DemandDiscoveryResult:
         """Discover keywords from fallback seed candidates and validate them."""
@@ -281,6 +288,7 @@ class DemandDiscoveryService:
             source="fallback",
             category=category,
             region=region,
+            platform=platform,
             max_keywords=max_keywords,
             discovery_mode="fallback",
             source_map=source_map,
@@ -295,6 +303,7 @@ class DemandDiscoveryService:
         source: str,
         category: Optional[str],
         region: str,
+        platform: Optional[str] = None,
         max_keywords: int,
         discovery_mode: Optional[str] = None,
         source_map: Optional[dict[str, str]] = None,
@@ -315,6 +324,7 @@ class DemandDiscoveryService:
             keywords=keywords,
             category=category,
             region=region,
+            platform=platform,
         )
 
         validated: list[DemandDiscoveryKeyword] = []

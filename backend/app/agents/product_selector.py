@@ -90,6 +90,7 @@ class ProductSelectorAgent(BaseAgent):
                     category=category,
                     keywords=keywords,
                     region=region,
+                    platform=platform.value,
                     allow_fallback=self.allow_keyword_fallback,
                     max_keywords=max_candidates,
                 )

@@ -94,6 +94,7 @@ async def test_product_selector_uses_demand_discovery_before_fetching():
     assert result.output_data["count"] == 1
     assert result.output_data["demand_discovery"]["discovery_mode"] == "generated"
     mock_discovery.discover_keywords.assert_called_once()
+    assert mock_discovery.discover_keywords.call_args.kwargs["platform"] == "alibaba_1688"
     mock_adapter.fetch_products.assert_called_once()
     assert mock_adapter.fetch_products.call_args.kwargs["keywords"] == ["validated keyword"]
 

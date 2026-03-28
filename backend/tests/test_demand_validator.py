@@ -879,6 +879,153 @@ class TestCategorySpecificValidation:
         assert len(result.rejection_reasons) == 0
 
 
+class TestPlatformSpecificValidation:
+    """Test platform-specific demand validation thresholds."""
+
+    def test_amazon_uses_higher_search_threshold(self):
+        """Test Amazon uses 1.3x multiplier (US 500 -> 650)."""
+        result = DemandValidationResult(
+            keyword="phone case",
+            search_volume=700,
+            competition_density=CompetitionDensity.LOW,
+            trend_direction=TrendDirection.RISING,
+            trend_growth_rate=Decimal("0.25"),
+            region="US",
+            platform="amazon",
+        )
+
+        assert result.passed is True
+        assert len(result.rejection_reasons) == 0
+
+    def test_amazon_rejects_below_higher_threshold(self):
+        """Test Amazon rejects below 650 (US 500 * 1.3)."""
+        result = DemandValidationResult(
+            keyword="phone case",
+            search_volume=600,
+            competition_density=CompetitionDensity.LOW,
+            trend_direction=TrendDirection.RISING,
+            trend_growth_rate=Decimal("0.25"),
+            region="US",
+            platform="amazon",
+        )
+
+        assert result.passed is False
+        assert any("Search volume too low" in reason for reason in result.rejection_reasons)
+        assert "600 < 650" in result.rejection_reasons[0]
+        assert "platform: amazon" in result.rejection_reasons[0]
+
+    def test_amazon_rejects_medium_competition(self):
+        """Test Amazon rejects MEDIUM competition."""
+        result = DemandValidationResult(
+            keyword="phone case",
+            search_volume=5000,
+            competition_density=CompetitionDensity.MEDIUM,
+            trend_direction=TrendDirection.RISING,
+            trend_growth_rate=Decimal("0.25"),
+            region="US",
+            platform="amazon",
+        )
+
+        assert result.passed is False
+        assert any("Competition density too high" in reason for reason in result.rejection_reasons)
+        assert "medium" in result.rejection_reasons[0]
+        assert "max: low" in result.rejection_reasons[0]
+        assert "platform: amazon" in result.rejection_reasons[0]
+
+    def test_temu_uses_lower_search_threshold(self):
+        """Test Temu uses 0.9x multiplier (US 500 -> 450)."""
+        result = DemandValidationResult(
+            keyword="phone case",
+            search_volume=460,
+            competition_density=CompetitionDensity.MEDIUM,
+            trend_direction=TrendDirection.RISING,
+            trend_growth_rate=Decimal("0.25"),
+            region="US",
+            platform="temu",
+        )
+
+        assert result.passed is True
+        assert len(result.rejection_reasons) == 0
+
+    def test_temu_accepts_medium_competition(self):
+        """Test Temu accepts MEDIUM competition."""
+        result = DemandValidationResult(
+            keyword="phone case",
+            search_volume=5000,
+            competition_density=CompetitionDensity.MEDIUM,
+            trend_direction=TrendDirection.RISING,
+            trend_growth_rate=Decimal("0.25"),
+            region="US",
+            platform="temu",
+        )
+
+        assert result.passed is True
+        assert len(result.rejection_reasons) == 0
+
+    def test_rakuten_rejects_medium_competition(self):
+        """Test Rakuten rejects MEDIUM competition."""
+        result = DemandValidationResult(
+            keyword="phone case",
+            search_volume=5000,
+            competition_density=CompetitionDensity.MEDIUM,
+            trend_direction=TrendDirection.RISING,
+            trend_growth_rate=Decimal("0.25"),
+            region="US",
+            platform="rakuten",
+        )
+
+        assert result.passed is False
+        assert any("Competition density too high" in reason for reason in result.rejection_reasons)
+
+    def test_platform_and_category_combined(self):
+        """Test platform and category multipliers combine (US 500 * 0.5 * 1.3 = 325)."""
+        result = DemandValidationResult(
+            keyword="phone charger",
+            search_volume=350,
+            competition_density=CompetitionDensity.LOW,
+            trend_direction=TrendDirection.RISING,
+            trend_growth_rate=Decimal("0.25"),
+            region="US",
+            category="electronics",
+            platform="amazon",
+        )
+
+        assert result.passed is True
+        assert len(result.rejection_reasons) == 0
+
+    def test_platform_region_category_combined_stricter_competition(self):
+        """Test combined rules choose strictest competition threshold."""
+        result = DemandValidationResult(
+            keyword="gold necklace",
+            search_volume=5000,
+            competition_density=CompetitionDensity.MEDIUM,
+            trend_direction=TrendDirection.RISING,
+            trend_growth_rate=Decimal("0.25"),
+            region="US",
+            category="jewelry",
+            platform="temu",
+        )
+
+        assert result.passed is False
+        assert any("Competition density too high" in reason for reason in result.rejection_reasons)
+        assert "max: low" in result.rejection_reasons[0]
+
+    def test_unknown_platform_uses_baseline(self):
+        """Test unknown platform uses baseline thresholds."""
+        result = DemandValidationResult(
+            keyword="phone case",
+            search_volume=600,
+            competition_density=CompetitionDensity.LOW,
+            trend_direction=TrendDirection.RISING,
+            trend_growth_rate=Decimal("0.25"),
+            region="US",
+            platform="unknown_platform",
+        )
+
+        assert result.passed is True
+        assert len(result.rejection_reasons) == 0
+
+
 class TestHelium10Integration:
     """Test Helium 10 API integration."""
 

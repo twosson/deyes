@@ -1437,6 +1437,7 @@ async def test_llm_expansion_runs_only_when_first_pass_recall_is_low():
     )
     low_recall_llm = FakeSGLangClient(queries=["磁吸手机壳"])
     low_recall_adapter = Alibaba1688Adapter(tmapi_client=low_recall_client, sglang_client=low_recall_llm)
+    low_recall_adapter.settings.product_selection_adapter_legacy_seed_mode = True
     low_recall_adapter.settings.tmapi_1688_enable_llm_query_expansion = True
     low_recall_adapter.settings.tmapi_1688_suggest_limit_per_seed = 0
     low_recall_adapter.settings.tmapi_1688_llm_query_limit = 2
@@ -1513,6 +1514,7 @@ async def test_llm_expansion_runs_only_when_first_pass_recall_is_low():
     )
     high_recall_llm = FakeSGLangClient(queries=["磁吸手机壳"])
     high_recall_adapter = Alibaba1688Adapter(tmapi_client=high_recall_client, sglang_client=high_recall_llm)
+    high_recall_adapter.settings.product_selection_adapter_legacy_seed_mode = True
     high_recall_adapter.settings.tmapi_1688_enable_llm_query_expansion = True
     high_recall_adapter.settings.tmapi_1688_suggest_limit_per_seed = 0
     high_recall_adapter.settings.tmapi_1688_llm_query_limit = 2
@@ -1635,6 +1637,7 @@ async def test_new_seed_types_have_stable_normalized_attributes_output():
         image_products=[],
     )
     adapter = Alibaba1688Adapter(tmapi_client=client)
+    adapter.settings.product_selection_adapter_legacy_seed_mode = True
     adapter.settings.tmapi_1688_suggest_limit_per_seed = 1
 
     products = await adapter.fetch_products(category="手机配件", limit=1)

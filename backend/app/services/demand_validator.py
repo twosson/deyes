@@ -64,25 +64,28 @@ class DemandValidationResult:
     # Region-specific context (2026-03-28)
     region: Optional[str] = None
 
+    # Category-specific context (2026-03-28)
+    category: Optional[str] = None
+
     def __post_init__(self):
-        """Calculate validation decision with region-specific thresholds."""
+        """Calculate validation decision with region and category-specific thresholds."""
         if self.rejection_reasons is None:
             self.rejection_reasons = []
 
-        # Region-specific thresholds
-        min_search_volume = self._get_min_search_volume_for_region(self.region)
-        max_competition_density = self._get_max_competition_density_for_region(self.region)
+        # Region and category-specific thresholds
+        min_search_volume = self._get_min_search_volume(self.region, self.category)
+        max_competition_density = self._get_max_competition_density(self.region, self.category)
 
         # Check search volume
         if self.search_volume is not None and self.search_volume < min_search_volume:
             self.rejection_reasons.append(
-                f"Search volume too low: {self.search_volume} < {min_search_volume} (region: {self.region or 'US'})"
+                f"Search volume too low: {self.search_volume} < {min_search_volume} (region: {self.region or 'US'}, category: {self.category or 'general'})"
             )
 
         # Check competition density
         if self._is_competition_too_high(self.competition_density, max_competition_density):
             self.rejection_reasons.append(
-                f"Competition density too high: {self.competition_density.value} (max: {max_competition_density.value}, region: {self.region or 'US'})"
+                f"Competition density too high: {self.competition_density.value} (max: {max_competition_density.value}, region: {self.region or 'US'}, category: {self.category or 'general'})"
             )
 
         # Check trend direction
@@ -92,8 +95,23 @@ class DemandValidationResult:
         # Passed if no rejection reasons
         self.passed = len(self.rejection_reasons) == 0
 
-    def _get_min_search_volume_for_region(self, region: Optional[str]) -> int:
-        """Get minimum search volume threshold for region."""
+    def _get_min_search_volume(self, region: Optional[str], category: Optional[str]) -> int:
+        """Get minimum search volume threshold for region and category.
+
+        Category multipliers (applied to region baseline):
+        - Electronics: 0.5x (lower barrier, fast-moving)
+        - Fashion: 0.7x (moderate barrier)
+        - Home: 0.8x (moderate barrier)
+        - Beauty: 0.9x (higher barrier)
+        - Jewelry: 1.5x (much higher barrier, niche)
+        - Sports: 0.8x (moderate barrier)
+        """
+        region_baseline = self._get_region_baseline_search_volume(region)
+        category_multiplier = self._get_category_search_volume_multiplier(category)
+        return int(region_baseline * category_multiplier)
+
+    def _get_region_baseline_search_volume(self, region: Optional[str]) -> int:
+        """Get baseline search volume threshold for region."""
         region_upper = (region or "US").upper()
         thresholds = {
             "US": 500,
@@ -113,14 +131,52 @@ class DemandValidationResult:
         }
         return thresholds.get(region_upper, 500)
 
-    def _get_max_competition_density_for_region(self, region: Optional[str]) -> CompetitionDensity:
-        """Get maximum allowed competition density for region."""
+    def _get_category_search_volume_multiplier(self, category: Optional[str]) -> float:
+        """Get search volume multiplier for category."""
+        if not category:
+            return 1.0
+
+        category_lower = category.lower().strip()
+        multipliers = {
+            "electronics": 0.5,
+            "fashion": 0.7,
+            "home": 0.8,
+            "beauty": 0.9,
+            "jewelry": 1.5,
+            "sports": 0.8,
+        }
+        return multipliers.get(category_lower, 1.0)
+
+    def _get_max_competition_density(self, region: Optional[str], category: Optional[str]) -> CompetitionDensity:
+        """Get maximum allowed competition density for region and category.
+
+        Category-specific competition tolerance:
+        - Electronics: MEDIUM (high volume compensates)
+        - Fashion: MEDIUM (trendy, high turnover)
+        - Jewelry: LOW (niche, avoid red ocean)
+        - Beauty: LOW (brand-sensitive)
+        - Home: MEDIUM (stable demand)
+        - Sports: MEDIUM (seasonal but predictable)
+        """
         region_upper = (region or "US").upper()
-        # US/EU: reject HIGH, CN: reject MEDIUM+
+
+        # Region baseline
         if region_upper in {"CN"}:
-            return CompetitionDensity.LOW
+            region_baseline = CompetitionDensity.LOW
         else:
-            return CompetitionDensity.MEDIUM
+            region_baseline = CompetitionDensity.MEDIUM
+
+        # Category override
+        if category:
+            category_lower = category.lower().strip()
+            category_overrides = {
+                "jewelry": CompetitionDensity.LOW,
+                "beauty": CompetitionDensity.LOW,
+            }
+            if category_lower in category_overrides:
+                return category_overrides[category_lower]
+
+        return region_baseline
 
     def _is_competition_too_high(
         self,
@@ -236,12 +292,13 @@ class DemandValidator:
 
         # Step 1: Check cache
         if self.enable_cache:
-            cached_result = await self._get_from_cache(keyword, region)
+            cached_result = await self._get_from_cache(keyword, region, category)
             if cached_result:
                 logger.info(
                     "demand_validation_cache_hit",
                     keyword=keyword,
                     region=region,
+                    category=category,
                 )
                 return cached_result
 
@@ -273,11 +330,12 @@ class DemandValidator:
             repurchase_rate=repurchase_rate,
             lead_time_days=lead_time_days,
             region=region,
+            category=category,
         )
 
         # Step 5: Cache result
         if self.enable_cache:
-            await self._save_to_cache(keyword, region, result)
+            await self._save_to_cache(keyword, region, result, category)
 
         logger.info(
             "demand_validation_completed",
@@ -295,12 +353,14 @@ class DemandValidator:
         self,
         keyword: str,
         region: str,
+        category: Optional[str] = None,
     ) -> Optional[DemandValidationResult]:
         """Get validation result from Redis cache.
 
         Args:
             keyword: Search keyword
             region: Target region
+            category: Product category
 
         Returns:
             Cached DemandValidationResult or None if not found
@@ -309,7 +369,7 @@ class DemandValidator:
             self.redis_client = RedisClient()
 
         try:
-            cache_key = self._build_cache_key(keyword, region)
+            cache_key = self._build_cache_key(keyword, region, category)
             cached_json = await self.redis_client.get(cache_key)
 
             if not cached_json:
@@ -329,6 +389,7 @@ class DemandValidator:
                 repurchase_rate=Decimal(str(cached_data["repurchase_rate"])) if cached_data.get("repurchase_rate") else None,
                 lead_time_days=cached_data.get("lead_time_days"),
                 region=region,
+                category=category,
             )
 
             return result
@@ -338,6 +399,7 @@ class DemandValidator:
                 "cache_get_failed",
                 keyword=keyword,
                 region=region,
+                category=category,
                 error=str(e),
             )
             return None
@@ -347,6 +409,7 @@ class DemandValidator:
         keyword: str,
         region: str,
         result: DemandValidationResult,
+        category: Optional[str] = None,
     ) -> None:
         """Save validation result to Redis cache.
 
@@ -354,12 +417,13 @@ class DemandValidator:
             keyword: Search keyword
             region: Target region
             result: Validation result to cache
+            category: Product category
         """
         if not self.redis_client:
             self.redis_client = RedisClient()
 
         try:
-            cache_key = self._build_cache_key(keyword, region)
+            cache_key = self._build_cache_key(keyword, region, category)
             result_dict = result.to_dict()
 
             # Serialize to JSON
@@ -376,6 +440,7 @@ class DemandValidator:
                 "cache_saved",
                 keyword=keyword,
                 region=region,
+                category=category,
                 cache_key=cache_key,
                 ttl_seconds=self.cache_ttl_seconds,
             )
@@ -385,24 +450,28 @@ class DemandValidator:
                 "cache_save_failed",
                 keyword=keyword,
                 region=region,
+                category=category,
                 error=str(e),
             )
 
-    def _build_cache_key(self, keyword: str, region: str) -> str:
+    def _build_cache_key(self, keyword: str, region: str, category: Optional[str] = None) -> str:
         """Build Redis cache key for demand validation.
 
         Uses MD5 hash of keyword to handle special characters and long keywords.
+        Includes category to avoid cross-category cache pollution.
 
         Args:
             keyword: Search keyword
             region: Target region
+            category: Product category
 
         Returns:
             Cache key string
         """
         # Use MD5 hash to handle special characters and long keywords
         keyword_hash = hashlib.md5(keyword.encode("utf-8")).hexdigest()
-        return f"demand_validation:{keyword_hash}:{region}"
+        category_suffix = f":{category}" if category else ""
+        return f"demand_validation:{keyword_hash}:{region}{category_suffix}"
 
     async def _get_search_trends(
         self,

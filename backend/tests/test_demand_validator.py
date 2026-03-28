@@ -718,6 +718,167 @@ class TestRegionSpecificValidation:
         assert len(result.rejection_reasons) == 0
 
 
+class TestCategorySpecificValidation:
+    """Test category-specific demand validation thresholds."""
+
+    def test_electronics_uses_lower_threshold(self):
+        """Test electronics category uses 0.5x multiplier (US 500 -> 250)."""
+        result = DemandValidationResult(
+            keyword="phone case",
+            search_volume=300,
+            competition_density=CompetitionDensity.LOW,
+            trend_direction=TrendDirection.RISING,
+            trend_growth_rate=Decimal("0.25"),
+            region="US",
+            category="electronics",
+        )
+
+        assert result.passed is True
+        assert len(result.rejection_reasons) == 0
+
+    def test_electronics_rejects_below_lowered_threshold(self):
+        """Test electronics rejects below 250 (US 500 * 0.5)."""
+        result = DemandValidationResult(
+            keyword="obscure gadget",
+            search_volume=200,
+            competition_density=CompetitionDensity.LOW,
+            trend_direction=TrendDirection.RISING,
+            trend_growth_rate=Decimal("0.25"),
+            region="US",
+            category="electronics",
+        )
+
+        assert result.passed is False
+        assert any("Search volume too low" in reason for reason in result.rejection_reasons)
+        assert "200 < 250" in result.rejection_reasons[0]
+        assert "category: electronics" in result.rejection_reasons[0]
+
+    def test_jewelry_uses_higher_threshold(self):
+        """Test jewelry category uses 1.5x multiplier (US 500 -> 750)."""
+        result = DemandValidationResult(
+            keyword="diamond ring",
+            search_volume=800,
+            competition_density=CompetitionDensity.LOW,
+            trend_direction=TrendDirection.RISING,
+            trend_growth_rate=Decimal("0.25"),
+            region="US",
+            category="jewelry",
+        )
+
+        assert result.passed is True
+        assert len(result.rejection_reasons) == 0
+
+    def test_jewelry_rejects_below_raised_threshold(self):
+        """Test jewelry rejects below 750 (US 500 * 1.5)."""
+        result = DemandValidationResult(
+            keyword="niche bracelet",
+            search_volume=600,
+            competition_density=CompetitionDensity.LOW,
+            trend_direction=TrendDirection.RISING,
+            trend_growth_rate=Decimal("0.25"),
+            region="US",
+            category="jewelry",
+        )
+
+        assert result.passed is False
+        assert any("Search volume too low" in reason for reason in result.rejection_reasons)
+        assert "600 < 750" in result.rejection_reasons[0]
+        assert "category: jewelry" in result.rejection_reasons[0]
+
+    def test_jewelry_rejects_medium_competition(self):
+        """Test jewelry category rejects MEDIUM competition (stricter than general)."""
+        result = DemandValidationResult(
+            keyword="gold necklace",
+            search_volume=5000,
+            competition_density=CompetitionDensity.MEDIUM,
+            trend_direction=TrendDirection.RISING,
+            trend_growth_rate=Decimal("0.25"),
+            region="US",
+            category="jewelry",
+        )
+
+        assert result.passed is False
+        assert any("Competition density too high" in reason for reason in result.rejection_reasons)
+        assert "medium" in result.rejection_reasons[0]
+        assert "max: low" in result.rejection_reasons[0]
+        assert "category: jewelry" in result.rejection_reasons[0]
+
+    def test_beauty_rejects_medium_competition(self):
+        """Test beauty category rejects MEDIUM competition."""
+        result = DemandValidationResult(
+            keyword="face cream",
+            search_volume=5000,
+            competition_density=CompetitionDensity.MEDIUM,
+            trend_direction=TrendDirection.RISING,
+            trend_growth_rate=Decimal("0.25"),
+            region="US",
+            category="beauty",
+        )
+
+        assert result.passed is False
+        assert any("Competition density too high" in reason for reason in result.rejection_reasons)
+
+    def test_fashion_uses_moderate_threshold(self):
+        """Test fashion category uses 0.7x multiplier (US 500 -> 350)."""
+        result = DemandValidationResult(
+            keyword="summer dress",
+            search_volume=400,
+            competition_density=CompetitionDensity.LOW,
+            trend_direction=TrendDirection.RISING,
+            trend_growth_rate=Decimal("0.25"),
+            region="US",
+            category="fashion",
+        )
+
+        assert result.passed is True
+        assert len(result.rejection_reasons) == 0
+
+    def test_home_uses_moderate_threshold(self):
+        """Test home category uses 0.8x multiplier (US 500 -> 400)."""
+        result = DemandValidationResult(
+            keyword="storage box",
+            search_volume=450,
+            competition_density=CompetitionDensity.LOW,
+            trend_direction=TrendDirection.RISING,
+            trend_growth_rate=Decimal("0.25"),
+            region="US",
+            category="home",
+        )
+
+        assert result.passed is True
+        assert len(result.rejection_reasons) == 0
+
+    def test_category_and_region_combined(self):
+        """Test category multiplier applies to region baseline (UK 350 * 0.5 = 175 for electronics)."""
+        result = DemandValidationResult(
+            keyword="phone case",
+            search_volume=200,
+            competition_density=CompetitionDensity.LOW,
+            trend_direction=TrendDirection.RISING,
+            trend_growth_rate=Decimal("0.25"),
+            region="UK",
+            category="electronics",
+        )
+
+        assert result.passed is True
+        assert len(result.rejection_reasons) == 0
+
+    def test_unknown_category_uses_baseline(self):
+        """Test unknown category uses 1.0x multiplier (no adjustment)."""
+        result = DemandValidationResult(
+            keyword="random product",
+            search_volume=600,
+            competition_density=CompetitionDensity.LOW,
+            trend_direction=TrendDirection.RISING,
+            trend_growth_rate=Decimal("0.25"),
+            region="US",
+            category="unknown_category",
+        )
+
+        assert result.passed is True
+        assert len(result.rejection_reasons) == 0
+
+
 class TestHelium10Integration:
     """Test Helium 10 API integration."""
 

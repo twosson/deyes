@@ -3,11 +3,11 @@
 Phase 3 Enhancement: Nightly keyword generation for automated product discovery.
 """
 import asyncio
+from typing import Optional
 from uuid import UUID
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
-from app.db.session import get_db_context
 from app.services.keyword_generator import KeywordGenerator
 from app.workers.celery_app import celery_app
 
@@ -97,13 +97,13 @@ async def _generate_keywords_for_category(
         }
     finally:
         if redis_client:
-            await redis_client.close()
+            await redis_client.aclose()
 
 
 @celery_app.task(name="tasks.generate_trending_keywords", bind=True)
 def generate_trending_keywords(
     self,
-    categories: list[str] | None = None,
+    categories: Optional[list[str]] = None,
     region: str = "US",
     limit: int = 50,
 ) -> dict:
@@ -137,12 +137,40 @@ def generate_trending_keywords(
 
     async def run_generation():
         results = []
+        settings = get_settings()
         for category in categories:
             result = await _generate_keywords_for_category(
                 category=category,
                 region=region,
                 limit=limit,
             )
+
+            if (
+                settings.keyword_generation_auto_trigger_selection
+                and result.get("success")
+            ):
+                auto_keywords: list[str] = []
+                seen: set[str] = set()
+
+                for keyword_data in result.get("base_keywords", []):
+                    keyword = (keyword_data or {}).get("keyword")
+                    if keyword and keyword not in seen:
+                        seen.add(keyword)
+                        auto_keywords.append(keyword)
+
+                for keyword in result.get("expanded_keywords", []):
+                    if keyword and keyword not in seen:
+                        seen.add(keyword)
+                        auto_keywords.append(keyword)
+
+                if auto_keywords:
+                    trigger_keyword_based_selection.delay(
+                        category=category,
+                        keywords=auto_keywords,
+                        region=region,
+                        max_candidates=limit,
+                    )
+
             results.append(result)
 
         return {
@@ -207,6 +235,7 @@ def trigger_keyword_based_selection(
     async def run_selection():
         from app.agents.base.agent import AgentContext
         from app.agents.product_selector import ProductSelectorAgent
+        from app.db.session import get_db_context
 
         async with get_db_context() as db:
             agent = ProductSelectorAgent(enable_demand_validation=True)

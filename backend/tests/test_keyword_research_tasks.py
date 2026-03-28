@@ -9,16 +9,13 @@ from app.workers import tasks_keyword_research
 def test_generate_trending_keywords_uses_default_categories(monkeypatch):
     """Task should use default categories if none provided."""
 
-    async def mock_run():
-        return {
-            "success": True,
-            "results": [],
-            "total_categories": 5,
-            "successful_categories": 5,
-            "failed_categories": 0,
-        }
-
-    mock_asyncio_run = MagicMock(return_value=mock_run())
+    mock_asyncio_run = MagicMock(return_value={
+        "success": True,
+        "results": [],
+        "total_categories": 5,
+        "successful_categories": 5,
+        "failed_categories": 0,
+    })
     monkeypatch.setattr("asyncio.run", mock_asyncio_run)
 
     task_func = tasks_keyword_research.generate_trending_keywords.__wrapped__
@@ -31,16 +28,13 @@ def test_generate_trending_keywords_uses_default_categories(monkeypatch):
 def test_generate_trending_keywords_uses_custom_categories(monkeypatch):
     """Task should use custom categories if provided."""
 
-    async def mock_run():
-        return {
-            "success": True,
-            "results": [],
-            "total_categories": 2,
-            "successful_categories": 2,
-            "failed_categories": 0,
-        }
-
-    mock_asyncio_run = MagicMock(return_value=mock_run())
+    mock_asyncio_run = MagicMock(return_value={
+        "success": True,
+        "results": [],
+        "total_categories": 2,
+        "successful_categories": 2,
+        "failed_categories": 0,
+    })
     monkeypatch.setattr("asyncio.run", mock_asyncio_run)
 
     task_func = tasks_keyword_research.generate_trending_keywords.__wrapped__
@@ -60,17 +54,94 @@ def test_generate_trending_keywords_raises_on_exception(monkeypatch):
         task_func(categories=["electronics"], region="US", limit=50)
 
 
+def test_generate_trending_keywords_auto_triggers_selection(monkeypatch):
+    """Task should auto-trigger downstream selection when enabled."""
+
+    async def mock_generate_for_category(category, region, limit):
+        return {
+            "success": True,
+            "category": category,
+            "region": region,
+            "base_keywords": [
+                {"keyword": "wireless earbuds"},
+                {"keyword": "phone stand"},
+            ],
+            "expanded_keywords": ["bluetooth earbuds", "wireless earbuds"],
+            "total_count": 4,
+        }
+
+    settings = MagicMock()
+    settings.keyword_generation_auto_trigger_selection = True
+
+    trigger_delay = MagicMock()
+    monkeypatch.setattr(
+        tasks_keyword_research,
+        "_generate_keywords_for_category",
+        mock_generate_for_category,
+    )
+    monkeypatch.setattr(tasks_keyword_research, "get_settings", lambda: settings)
+    monkeypatch.setattr(
+        tasks_keyword_research.trigger_keyword_based_selection,
+        "delay",
+        trigger_delay,
+    )
+
+    task_func = tasks_keyword_research.generate_trending_keywords.__wrapped__
+    result = task_func(categories=["electronics"], region="US", limit=10)
+
+    assert result["success"] is True
+    trigger_delay.assert_called_once_with(
+        category="electronics",
+        keywords=["wireless earbuds", "phone stand", "bluetooth earbuds"],
+        region="US",
+        max_candidates=10,
+    )
+
+
+def test_generate_trending_keywords_skips_auto_trigger_when_disabled(monkeypatch):
+    """Task should not auto-trigger downstream selection when disabled."""
+
+    async def mock_generate_for_category(category, region, limit):
+        return {
+            "success": True,
+            "category": category,
+            "region": region,
+            "base_keywords": [{"keyword": "wireless earbuds"}],
+            "expanded_keywords": ["bluetooth earbuds"],
+            "total_count": 2,
+        }
+
+    settings = MagicMock()
+    settings.keyword_generation_auto_trigger_selection = False
+
+    trigger_delay = MagicMock()
+    monkeypatch.setattr(
+        tasks_keyword_research,
+        "_generate_keywords_for_category",
+        mock_generate_for_category,
+    )
+    monkeypatch.setattr(tasks_keyword_research, "get_settings", lambda: settings)
+    monkeypatch.setattr(
+        tasks_keyword_research.trigger_keyword_based_selection,
+        "delay",
+        trigger_delay,
+    )
+
+    task_func = tasks_keyword_research.generate_trending_keywords.__wrapped__
+    result = task_func(categories=["electronics"], region="US", limit=10)
+
+    assert result["success"] is True
+    trigger_delay.assert_not_called()
+
+
 def test_trigger_keyword_based_selection_returns_result(monkeypatch):
     """Selection task should wrap agent execution and return result."""
 
-    async def mock_run():
-        return {
-            "success": True,
-            "output_data": {"candidate_ids": ["id1", "id2"], "count": 2},
-            "error_message": None,
-        }
-
-    mock_asyncio_run = MagicMock(return_value=mock_run())
+    mock_asyncio_run = MagicMock(return_value={
+        "success": True,
+        "output_data": {"candidate_ids": ["id1", "id2"], "count": 2},
+        "error_message": None,
+    })
     monkeypatch.setattr("asyncio.run", mock_asyncio_run)
 
     task_func = tasks_keyword_research.trigger_keyword_based_selection.__wrapped__

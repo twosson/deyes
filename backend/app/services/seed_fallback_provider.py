@@ -7,6 +7,7 @@ use in 1688 search.
 This service encapsulates the legacy seed generation logic (seasonal, category
 hotwords, cold-start) but does NOT authorize their use. It only provides candidates.
 """
+from datetime import datetime, timezone
 from typing import Optional
 
 from app.core.logging import get_logger
@@ -100,9 +101,7 @@ class SeedFallbackProvider:
                     return candidates
 
         # 2. Seasonal seeds
-        from datetime import UTC, datetime
-
-        month = datetime.now(UTC).month
+        month = datetime.now(timezone.utc).month
         if month in {3, 4, 5}:
             season = "spring"
         elif month in {6, 7, 8}:

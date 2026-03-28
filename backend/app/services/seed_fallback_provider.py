@@ -45,6 +45,17 @@ class SeedFallbackProvider:
     # Cold start seeds (from config)
     DEFAULT_COLD_START_SEEDS = ["热销", "新品", "爆款", "推荐"]
 
+    # Region-specific fallback seeds (2026-03-28)
+    REGION_COLD_START_SEEDS = {
+        "US": ["trending", "best seller", "new arrival", "gift ideas"],
+        "UK": ["trending uk", "best seller", "new in", "gift ideas"],
+        "GB": ["trending uk", "best seller", "new in", "gift ideas"],
+        "DE": ["trendartikel", "bestseller", "neuheiten", "geschenkideen"],
+        "FR": ["tendance", "meilleures ventes", "nouveautés", "idées cadeaux"],
+        "JP": ["人気商品", "売れ筋", "新着", "ギフト"],
+        "CN": ["热销", "新品", "爆款", "推荐"],
+    }
+
     def __init__(
         self,
         cold_start_seeds: Optional[list[str]] = None,
@@ -78,18 +89,17 @@ class SeedFallbackProvider:
         Priority order:
         1. Category hotwords (if category provided)
         2. Seasonal seeds (current season)
-        3. Cold start seeds (generic fallback)
+        3. Region-specific cold start seeds
 
         Args:
             category: Product category (optional)
-            region: Target region (optional, for future use)
+            region: Target region (optional, for region-specific seeds)
             limit: Maximum keywords to return
 
         Returns:
             List of (keyword, source_type) tuples
             source_type: "category_hotword", "seasonal", "cold_start"
         """
-        _ = region  # Reserved for future use
         candidates: list[tuple[str, str]] = []
 
         # 1. Category hotwords (if category provided)
@@ -117,7 +127,17 @@ class SeedFallbackProvider:
             if len(candidates) >= limit:
                 return candidates
 
-        # 3. Cold start seeds
+        # 3. Region-specific cold start seeds
+        region_upper = (region or "US").upper()
+        region_seeds = self.REGION_COLD_START_SEEDS.get(
+            region_upper, self.REGION_COLD_START_SEEDS.get("US", self.cold_start_seeds)
+        )
+        for seed in region_seeds:
+            candidates.append((seed, "cold_start"))
+            if len(candidates) >= limit:
+                return candidates
+
+        # 4. Fallback to default cold start seeds
         for seed in self.cold_start_seeds:
             candidates.append((seed, "cold_start"))
             if len(candidates) >= limit:
@@ -126,6 +146,7 @@ class SeedFallbackProvider:
         self.logger.info(
             "fallback_keywords_generated",
             category=category,
+            region=region,
             count=len(candidates),
             sources=[source for _, source in candidates],
         )

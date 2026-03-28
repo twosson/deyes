@@ -208,3 +208,123 @@ async def test_season_detection():
         mock_datetime.now.return_value.month = 12
         result = await provider.get_candidate_fallback_keywords(limit=1)
         assert result[0][0] in ["冬季新品", "冬装", "冬季热销"]
+
+
+@pytest.mark.asyncio
+async def test_region_specific_cold_start_seeds_us():
+    """Test US region uses English cold start seeds."""
+    provider = SeedFallbackProvider(
+        cold_start_seeds=["热销", "新品"],
+        seasonal_seed_limit=0,
+        category_hotword_limit=0,
+    )
+
+    result = await provider.get_candidate_fallback_keywords(
+        category=None,
+        region="US",
+        limit=10,
+    )
+
+    cold_start_results = [r for r in result if r[1] == "cold_start"]
+    assert len(cold_start_results) > 0
+    assert cold_start_results[0][0] in ["trending", "best seller", "new arrival", "gift ideas"]
+
+
+@pytest.mark.asyncio
+async def test_region_specific_cold_start_seeds_de():
+    """Test DE region uses German cold start seeds."""
+    provider = SeedFallbackProvider(
+        cold_start_seeds=["热销", "新品"],
+        seasonal_seed_limit=0,
+        category_hotword_limit=0,
+    )
+
+    result = await provider.get_candidate_fallback_keywords(
+        category=None,
+        region="DE",
+        limit=10,
+    )
+
+    cold_start_results = [r for r in result if r[1] == "cold_start"]
+    assert len(cold_start_results) > 0
+    assert cold_start_results[0][0] in ["trendartikel", "bestseller", "neuheiten", "geschenkideen"]
+
+
+@pytest.mark.asyncio
+async def test_region_specific_cold_start_seeds_jp():
+    """Test JP region uses Japanese cold start seeds."""
+    provider = SeedFallbackProvider(
+        cold_start_seeds=["热销", "新品"],
+        seasonal_seed_limit=0,
+        category_hotword_limit=0,
+    )
+
+    result = await provider.get_candidate_fallback_keywords(
+        category=None,
+        region="JP",
+        limit=10,
+    )
+
+    cold_start_results = [r for r in result if r[1] == "cold_start"]
+    assert len(cold_start_results) > 0
+    assert cold_start_results[0][0] in ["人気商品", "売れ筋", "新着", "ギフト"]
+
+
+@pytest.mark.asyncio
+async def test_region_specific_cold_start_seeds_cn():
+    """Test CN region uses Chinese cold start seeds."""
+    provider = SeedFallbackProvider(
+        cold_start_seeds=["热销", "新品"],
+        seasonal_seed_limit=0,
+        category_hotword_limit=0,
+    )
+
+    result = await provider.get_candidate_fallback_keywords(
+        category=None,
+        region="CN",
+        limit=10,
+    )
+
+    cold_start_results = [r for r in result if r[1] == "cold_start"]
+    assert len(cold_start_results) > 0
+    assert cold_start_results[0][0] in ["热销", "新品", "爆款", "推荐"]
+
+
+@pytest.mark.asyncio
+async def test_unknown_region_falls_back_to_us():
+    """Test unknown region falls back to US cold start seeds."""
+    provider = SeedFallbackProvider(
+        cold_start_seeds=["热销", "新品"],
+        seasonal_seed_limit=0,
+        category_hotword_limit=0,
+    )
+
+    result = await provider.get_candidate_fallback_keywords(
+        category=None,
+        region="XX",
+        limit=10,
+    )
+
+    cold_start_results = [r for r in result if r[1] == "cold_start"]
+    assert len(cold_start_results) > 0
+    assert cold_start_results[0][0] in ["trending", "best seller", "new arrival", "gift ideas"]
+
+
+@pytest.mark.asyncio
+async def test_none_region_falls_back_to_us():
+    """Test None region falls back to US cold start seeds."""
+    provider = SeedFallbackProvider(
+        cold_start_seeds=["热销", "新品"],
+        seasonal_seed_limit=0,
+        category_hotword_limit=0,
+    )
+
+    result = await provider.get_candidate_fallback_keywords(
+        category=None,
+        region=None,
+        limit=10,
+    )
+
+    cold_start_results = [r for r in result if r[1] == "cold_start"]
+    assert len(cold_start_results) > 0
+    assert cold_start_results[0][0] in ["trending", "best seller", "new arrival", "gift ideas"]

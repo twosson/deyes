@@ -61,18 +61,29 @@ class DemandValidationResult:
     passed: bool = False
     rejection_reasons: list[str] = None
 
+    # Region-specific context (2026-03-28)
+    region: Optional[str] = None
+
     def __post_init__(self):
-        """Calculate validation decision."""
+        """Calculate validation decision with region-specific thresholds."""
         if self.rejection_reasons is None:
             self.rejection_reasons = []
 
+        # Region-specific thresholds
+        min_search_volume = self._get_min_search_volume_for_region(self.region)
+        max_competition_density = self._get_max_competition_density_for_region(self.region)
+
         # Check search volume
-        if self.search_volume is not None and self.search_volume < 500:
-            self.rejection_reasons.append(f"Search volume too low: {self.search_volume} < 500")
+        if self.search_volume is not None and self.search_volume < min_search_volume:
+            self.rejection_reasons.append(
+                f"Search volume too low: {self.search_volume} < {min_search_volume} (region: {self.region or 'US'})"
+            )
 
         # Check competition density
-        if self.competition_density == CompetitionDensity.HIGH:
-            self.rejection_reasons.append("Competition density too high (red ocean market)")
+        if self._is_competition_too_high(self.competition_density, max_competition_density):
+            self.rejection_reasons.append(
+                f"Competition density too high: {self.competition_density.value} (max: {max_competition_density.value}, region: {self.region or 'US'})"
+            )
 
         # Check trend direction
         if self.trend_direction == TrendDirection.DECLINING:
@@ -80,6 +91,50 @@ class DemandValidationResult:
 
         # Passed if no rejection reasons
         self.passed = len(self.rejection_reasons) == 0
+
+    def _get_min_search_volume_for_region(self, region: Optional[str]) -> int:
+        """Get minimum search volume threshold for region."""
+        region_upper = (region or "US").upper()
+        thresholds = {
+            "US": 500,
+            "UK": 350,
+            "GB": 350,
+            "DE": 400,
+            "FR": 400,
+            "ES": 350,
+            "IT": 350,
+            "CA": 400,
+            "AU": 400,
+            "JP": 600,
+            "CN": 800,
+            "BR": 300,
+            "MX": 300,
+            "RU": 400,
+        }
+        return thresholds.get(region_upper, 500)
+
+    def _get_max_competition_density_for_region(self, region: Optional[str]) -> CompetitionDensity:
+        """Get maximum allowed competition density for region."""
+        region_upper = (region or "US").upper()
+        # US/EU: reject HIGH, CN: reject MEDIUM+
+        if region_upper in {"CN"}:
+            return CompetitionDensity.LOW
+        else:
+            return CompetitionDensity.MEDIUM
+
+    def _is_competition_too_high(
+        self,
+        actual: CompetitionDensity,
+        max_allowed: CompetitionDensity,
+    ) -> bool:
+        """Check if competition density exceeds threshold."""
+        density_order = {
+            CompetitionDensity.LOW: 1,
+            CompetitionDensity.MEDIUM: 2,
+            CompetitionDensity.HIGH: 3,
+            CompetitionDensity.UNKNOWN: 0,
+        }
+        return density_order.get(actual, 0) > density_order.get(max_allowed, 3)
 
     def to_dict(self) -> dict:
         """Convert to dictionary."""
@@ -217,6 +272,7 @@ class DemandValidator:
             hot_sell_rank=hot_sell_rank,
             repurchase_rate=repurchase_rate,
             lead_time_days=lead_time_days,
+            region=region,
         )
 
         # Step 5: Cache result
@@ -272,6 +328,7 @@ class DemandValidator:
                 hot_sell_rank=cached_data.get("hot_sell_rank"),
                 repurchase_rate=Decimal(str(cached_data["repurchase_rate"])) if cached_data.get("repurchase_rate") else None,
                 lead_time_days=cached_data.get("lead_time_days"),
+                region=region,
             )
 
             return result

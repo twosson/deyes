@@ -348,32 +348,128 @@ class TestDemandDiscoveryService:
         assert len(call_args.kwargs["keywords"]) == 1
 
     @pytest.mark.asyncio
-    async def test_max_keywords_limit_enforced(
+    async def test_region_passed_to_validator_and_generator(
+        self,
+        demand_discovery_service,
+        mock_demand_validator,
+        mock_keyword_generator,
+    ):
+        """Test region is propagated to generator and validator for runtime discovery."""
+        mock_keyword_generator.generate_selection_keywords.return_value = [
+            KeywordResult(
+                keyword="smart watch",
+                search_volume=12000,
+                trend_score=90,
+                competition_density=CompetitionDensity.MEDIUM,
+                related_keywords=["fitness tracker"],
+                category="electronics",
+                region="DE",
+            ),
+        ]
+
+        mock_demand_validator.validate_batch.return_value = [
+            DemandValidationResult(
+                keyword="smart watch",
+                search_volume=12000,
+                competition_density=CompetitionDensity.MEDIUM,
+                trend_direction=TrendDirection.RISING,
+                trend_growth_rate=None,
+                passed=True,
+                region="DE",
+            ),
+        ]
+
+        result = await demand_discovery_service.discover_keywords(
+            category="electronics",
+            keywords=None,
+            region="DE",
+            max_keywords=10,
+        )
+
+        assert result.discovery_mode == "generated"
+        mock_keyword_generator.generate_selection_keywords.assert_called_once_with(
+            category="electronics",
+            region="DE",
+            limit=20,
+            expand_top_n=5,
+        )
+        mock_demand_validator.validate_batch.assert_called_once_with(
+            keywords=["smart watch"],
+            category="electronics",
+            region="DE",
+        )
+
+    @pytest.mark.asyncio
+    async def test_region_passed_to_fallback_provider(
+        self,
+        demand_discovery_service,
+        mock_demand_validator,
+        mock_keyword_generator,
+        mock_seed_fallback_provider,
+    ):
+        """Test region is propagated to fallback provider and validator."""
+        mock_keyword_generator.generate_selection_keywords.return_value = []
+        mock_seed_fallback_provider.get_candidate_fallback_keywords.return_value = [
+            ("trendartikel", "cold_start"),
+        ]
+        mock_demand_validator.validate_batch.return_value = [
+            DemandValidationResult(
+                keyword="trendartikel",
+                search_volume=3000,
+                competition_density=CompetitionDensity.LOW,
+                trend_direction=TrendDirection.STABLE,
+                trend_growth_rate=None,
+                passed=True,
+                region="DE",
+            ),
+        ]
+
+        result = await demand_discovery_service.discover_keywords(
+            category="electronics",
+            keywords=None,
+            region="DE",
+            allow_fallback=True,
+            max_keywords=10,
+        )
+
+        assert result.discovery_mode == "fallback"
+        assert result.validated_keywords[0].source == "fallback_cold_start"
+        mock_seed_fallback_provider.get_candidate_fallback_keywords.assert_called_once_with(
+            category="electronics",
+            region="DE",
+            limit=20,
+        )
+        assert mock_demand_validator.validate_batch.call_args_list[-1].kwargs["region"] == "DE"
+
+    @pytest.mark.asyncio
+    async def test_default_region_used_when_region_missing(
         self,
         demand_discovery_service,
         mock_demand_validator,
     ):
-        """Test max_keywords limit is enforced."""
-        # Arrange
+        """Test default US region is used when region is missing."""
         mock_demand_validator.validate_batch.return_value = [
             DemandValidationResult(
-                keyword=f"keyword{i}",
+                keyword="wireless earbuds",
                 search_volume=5000,
                 competition_density=CompetitionDensity.LOW,
                 trend_direction=TrendDirection.RISING,
                 trend_growth_rate=None,
                 passed=True,
-            )
-            for i in range(20)
+                region="US",
+            ),
         ]
 
-        # Act
         result = await demand_discovery_service.discover_keywords(
             category="electronics",
-            keywords=[f"keyword{i}" for i in range(20)],
-            region="US",
-            max_keywords=5,
+            keywords=["wireless earbuds"],
+            region=None,
+            max_keywords=10,
         )
 
-        # Assert
-        assert len(result.validated_keywords) == 5
+        assert result.discovery_mode == "user"
+        mock_demand_validator.validate_batch.assert_called_once_with(
+            keywords=["wireless earbuds"],
+            category="electronics",
+            region="US",
+        )

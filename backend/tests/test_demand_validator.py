@@ -548,6 +548,176 @@ async def test_pytrends_fallback_on_import_error():
     assert result.trend_direction == TrendDirection.STABLE
 
 
+class TestRegionSpecificValidation:
+    """Test region-specific demand validation thresholds."""
+
+    def test_us_region_uses_default_threshold(self):
+        """Test US region uses default 500 search volume threshold."""
+        result = DemandValidationResult(
+            keyword="phone case",
+            search_volume=600,
+            competition_density=CompetitionDensity.LOW,
+            trend_direction=TrendDirection.RISING,
+            trend_growth_rate=Decimal("0.25"),
+            region="US",
+        )
+
+        assert result.passed is True
+        assert len(result.rejection_reasons) == 0
+
+    def test_us_region_rejects_below_threshold(self):
+        """Test US region rejects below 500 search volume."""
+        result = DemandValidationResult(
+            keyword="obscure product",
+            search_volume=400,
+            competition_density=CompetitionDensity.LOW,
+            trend_direction=TrendDirection.RISING,
+            trend_growth_rate=Decimal("0.25"),
+            region="US",
+        )
+
+        assert result.passed is False
+        assert any("Search volume too low" in reason for reason in result.rejection_reasons)
+        assert "400 < 500" in result.rejection_reasons[0]
+        assert "region: US" in result.rejection_reasons[0]
+
+    def test_uk_region_uses_lower_threshold(self):
+        """Test UK region uses 350 search volume threshold."""
+        result = DemandValidationResult(
+            keyword="phone case",
+            search_volume=400,
+            competition_density=CompetitionDensity.LOW,
+            trend_direction=TrendDirection.RISING,
+            trend_growth_rate=Decimal("0.25"),
+            region="UK",
+        )
+
+        assert result.passed is True
+        assert len(result.rejection_reasons) == 0
+
+    def test_uk_region_rejects_below_threshold(self):
+        """Test UK region rejects below 350 search volume."""
+        result = DemandValidationResult(
+            keyword="obscure product",
+            search_volume=300,
+            competition_density=CompetitionDensity.LOW,
+            trend_direction=TrendDirection.RISING,
+            trend_growth_rate=Decimal("0.25"),
+            region="UK",
+        )
+
+        assert result.passed is False
+        assert any("Search volume too low" in reason for reason in result.rejection_reasons)
+        assert "300 < 350" in result.rejection_reasons[0]
+        assert "region: UK" in result.rejection_reasons[0]
+
+    def test_cn_region_uses_higher_threshold(self):
+        """Test CN region uses 800 search volume threshold."""
+        result = DemandValidationResult(
+            keyword="phone case",
+            search_volume=900,
+            competition_density=CompetitionDensity.LOW,
+            trend_direction=TrendDirection.RISING,
+            trend_growth_rate=Decimal("0.25"),
+            region="CN",
+        )
+
+        assert result.passed is True
+        assert len(result.rejection_reasons) == 0
+
+    def test_cn_region_rejects_below_threshold(self):
+        """Test CN region rejects below 800 search volume."""
+        result = DemandValidationResult(
+            keyword="obscure product",
+            search_volume=700,
+            competition_density=CompetitionDensity.LOW,
+            trend_direction=TrendDirection.RISING,
+            trend_growth_rate=Decimal("0.25"),
+            region="CN",
+        )
+
+        assert result.passed is False
+        assert any("Search volume too low" in reason for reason in result.rejection_reasons)
+        assert "700 < 800" in result.rejection_reasons[0]
+        assert "region: CN" in result.rejection_reasons[0]
+
+    def test_cn_region_rejects_medium_competition(self):
+        """Test CN region rejects MEDIUM competition (stricter than US/EU)."""
+        result = DemandValidationResult(
+            keyword="phone case",
+            search_volume=5000,
+            competition_density=CompetitionDensity.MEDIUM,
+            trend_direction=TrendDirection.RISING,
+            trend_growth_rate=Decimal("0.25"),
+            region="CN",
+        )
+
+        assert result.passed is False
+        assert any("Competition density too high" in reason for reason in result.rejection_reasons)
+        assert "medium" in result.rejection_reasons[0]
+        assert "max: low" in result.rejection_reasons[0]
+        assert "region: CN" in result.rejection_reasons[0]
+
+    def test_us_region_accepts_medium_competition(self):
+        """Test US region accepts MEDIUM competition."""
+        result = DemandValidationResult(
+            keyword="phone case",
+            search_volume=5000,
+            competition_density=CompetitionDensity.MEDIUM,
+            trend_direction=TrendDirection.RISING,
+            trend_growth_rate=Decimal("0.25"),
+            region="US",
+        )
+
+        assert result.passed is True
+        assert len(result.rejection_reasons) == 0
+
+    def test_us_region_rejects_high_competition(self):
+        """Test US region rejects HIGH competition."""
+        result = DemandValidationResult(
+            keyword="phone case",
+            search_volume=5000,
+            competition_density=CompetitionDensity.HIGH,
+            trend_direction=TrendDirection.RISING,
+            trend_growth_rate=Decimal("0.25"),
+            region="US",
+        )
+
+        assert result.passed is False
+        assert any("Competition density too high" in reason for reason in result.rejection_reasons)
+        assert "high" in result.rejection_reasons[0]
+        assert "max: medium" in result.rejection_reasons[0]
+        assert "region: US" in result.rejection_reasons[0]
+
+    def test_unknown_region_uses_default_threshold(self):
+        """Test unknown region falls back to US defaults."""
+        result = DemandValidationResult(
+            keyword="phone case",
+            search_volume=600,
+            competition_density=CompetitionDensity.LOW,
+            trend_direction=TrendDirection.RISING,
+            trend_growth_rate=Decimal("0.25"),
+            region="XX",
+        )
+
+        assert result.passed is True
+        assert len(result.rejection_reasons) == 0
+
+    def test_none_region_uses_default_threshold(self):
+        """Test None region falls back to US defaults."""
+        result = DemandValidationResult(
+            keyword="phone case",
+            search_volume=600,
+            competition_density=CompetitionDensity.LOW,
+            trend_direction=TrendDirection.RISING,
+            trend_growth_rate=Decimal("0.25"),
+            region=None,
+        )
+
+        assert result.passed is True
+        assert len(result.rejection_reasons) == 0
+
+
 class TestHelium10Integration:
     """Test Helium 10 API integration."""
 

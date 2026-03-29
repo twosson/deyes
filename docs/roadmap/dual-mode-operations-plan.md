@@ -2,9 +2,10 @@
 
 > 基于深度业务分析与自研 ERP Lite 内核设计
 >
-> 版本: v1.0
+> 版本: v1.1
 > 创建时间: 2026-03-29
-> 状态: 待实施
+> 更新时间: 2026-03-29
+> 状态: ⚠️ 部分实施中（Phase 0-2 已完成，Phase 3-6 待实施）
 
 ---
 
@@ -38,9 +39,10 @@ CandidateProduct 通过阈值
 - 采购、库存、订单、利润都围绕 SKU 展开
 - 不同平台可共享同一 SKU 的主数据
 
-**当前缺口**：
-- `PlatformListing` 直接挂 `candidate_product_id`（`backend/app/db/models.py:381-384`）
-- 缺少 `ProductMaster / ProductVariant` 模型
+**当前状态**：
+- ✅ `PlatformListing` 已关联 `product_variant_id`（`backend/app/db/models.py:452`）
+- ✅ `ProductMaster / ProductVariant` 模型已实现（`backend/app/db/models.py:706`, `backend/app/db/models.py:732`）
+- ✅ Candidate → SKU 转化链路已接入主流程（`backend/app/agents/director_workflow.py:18`, `backend/app/agents/director_workflow.py:131`）
 
 ---
 
@@ -66,9 +68,11 @@ CandidateProduct 通过阈值
 - 只有视觉差异大时才重新生成
 
 **当前状态**：
-- `ContentAsset` 模型已有 `style_tags/platform_tags/region_tags/variant_group`（`backend/app/db/models.py:320-324`）
-- `ContentAssetManagerAgent` 已实现但未接入主流程（`backend/app/agents/content_asset_manager.py:23-158`）
-- `DirectorWorkflow` 不包含图像生成步骤（`backend/app/agents/director_workflow.py:49-115`）
+- ✅ `ContentAsset` 模型已扩展 `usage_scope/language_tags/spec/compliance_tags/product_variant_id`（`backend/app/db/models.py:308`）
+- ✅ `ContentAssetManagerAgent` 已接入主流程并支持基础素材生成（`backend/app/agents/content_asset_manager.py:23`, `backend/app/agents/director_workflow.py:249`）
+- ✅ `DirectorWorkflow` 已包含基础素材生成步骤（`backend/app/agents/director_workflow.py:131`, `backend/app/agents/director_workflow.py:249`）
+- ✅ `PlatformPublisherAgent` 已支持平台素材自动选择与按需派生（`backend/app/agents/platform_publisher.py:217`, `backend/app/agents/platform_publisher.py:487`）
+- ✅ 已实现文字覆盖与 ComfyUI 重生成能力（`backend/app/services/text_overlay_service.py`, `backend/app/services/image_regeneration_service.py`）
 
 ---
 
@@ -273,9 +277,11 @@ if sku.inventory_mode == "stock_first":
 ```
 
 #### 验收标准
-- [ ] 平台模式矩阵文档完成
-- [ ] 平台内容规则矩阵文档完成
-- [ ] SKU 激活规则文档完成
+- [x] 平台模式矩阵文档完成 → `docs/business-rules/platform-mode-matrix.md`
+- [x] 平台内容规则矩阵文档完成 → `docs/business-rules/platform-content-rules.md`
+- [x] SKU 激活规则文档完成 → `docs/business-rules/sku-activation-rules.md`
+
+**实施状态**: ✅ 已完成（2026-03-29）
 
 ---
 
@@ -319,12 +325,26 @@ if sku.inventory_mode == "stock_first":
 - 更新 `DirectorWorkflow` 接入 SKU 转化
 
 #### 验收标准
-- [ ] 一个 Candidate 可稳定转 ProductMaster / SKU
-- [ ] 一个 SKU 可绑定主供应商
-- [ ] 一个 SKU 可有库存事实
-- [ ] 一个 SKU 可区分 `pre_order` / `stock_first`
-- [ ] migration 可成功执行
-- [ ] 核心测试通过
+- [x] 一个 Candidate 可稳定转 ProductMaster / SKU
+- [x] 一个 SKU 可绑定主供应商
+- [x] 一个 SKU 可有库存事实
+- [x] 一个 SKU 可区分 `pre_order` / `stock_first`
+- [x] migration 可成功执行（007, 008）
+- [x] 核心测试通过
+
+**实施状态**: ✅ 已完成（2026-03-29）
+
+**实现位置**:
+- `ProductMaster / ProductVariant`: `backend/app/db/models.py:706`, `backend/app/db/models.py:732`
+- `Supplier / SupplierOffer`: `backend/app/db/models.py:691-741`
+- `PurchaseOrder / InboundShipment`: `backend/app/db/models.py:744-825`
+- `InventoryLevel / InventoryReservation`: `backend/app/db/models.py:827-870`
+- `CandidateConversionService`: `backend/app/services/candidate_conversion_service.py`
+- `ProductMasterService`: `backend/app/services/product_master_service.py`
+- `SupplierMasterService`: `backend/app/services/supplier_master_service.py`
+- `ProcurementService`: `backend/app/services/procurement_service.py`
+- `InventoryAllocator`: `backend/app/services/inventory_allocator.py`
+- `DirectorWorkflow` 集成: `backend/app/agents/director_workflow.py:18`, `backend/app/agents/director_workflow.py:131`
 
 #### 参考文档
 - `docs/roadmap/stage3-implementation-tasks.md`
@@ -364,11 +384,25 @@ if sku.inventory_mode == "stock_first":
 - 实现素材回退机制（通用素材 fallback）
 
 #### 验收标准
-- [ ] 一个 SKU 可维护素材矩阵
-- [ ] 一个 Listing 可自动选择匹配的素材组合
-- [ ] 同一视觉可复用到多个平台/语言版本
-- [ ] 素材生成接入主流程
-- [ ] 测试通过
+- [x] 一个 SKU 可维护素材矩阵
+- [x] 一个 Listing 可自动选择匹配的素材组合
+- [x] 同一视觉可复用到多个平台/语言版本
+- [x] 素材生成接入主流程
+- [x] 测试通过
+
+**实施状态**: ✅ 已完成（2026-03-29）
+
+**实现位置**:
+- `ContentAsset` 扩展: `backend/app/db/models.py:308`
+- `LocalizationContent`: `backend/app/db/models.py:390-422`
+- `PlatformContentRule`: `backend/app/db/models.py:424-450`
+- `LocalizationService`: `backend/app/services/localization_service.py`
+- `PlatformAssetAdapter`: `backend/app/services/platform_asset_adapter.py`
+- `TextOverlayService`: `backend/app/services/text_overlay_service.py`
+- `AssetDerivationService`: `backend/app/services/asset_derivation_service.py`
+- `ImageRegenerationService`: `backend/app/services/image_regeneration_service.py`
+- `DirectorWorkflow` 基础素材生成: `backend/app/agents/director_workflow.py:249`
+- `PlatformPublisherAgent` 平台素材选择: `backend/app/agents/platform_publisher.py:217`, `backend/app/agents/platform_publisher.py:487`
 
 #### 参考文档
 - `docs/roadmap/stage5-implementation-tasks.md` (D1-D3)
@@ -539,32 +573,77 @@ if sku.inventory_mode == "stock_first":
 
 ## 📊 总工作量估算
 
-| Phase | 工作量 | 优先级 |
-|-------|--------|--------|
-| Phase 0 | 1-2 天 | P0 |
-| Phase 1 | 80-116h | P0 |
-| Phase 2 | 24-36h | P0 |
-| Phase 3 | 18-26h | P0 |
-| Phase 4 | 22-32h | P0 |
-| Phase 5 | 23-33h | P1 |
-| Phase 6 | 20-30h | P1 |
-| **总计** | **187-275h** | **约 5-7 人月** |
+| Phase | 规划工作量 | 实际状态 | 完成度 |
+|-------|-----------|---------|--------|
+| Phase 0 | 1-2 天 | ✅ 已完成 | 100% |
+| Phase 1 | 80-116h | ✅ 已完成 | 100% |
+| Phase 2 | 24-36h | ✅ 已完成 | 100% |
+| Phase 3 | 18-26h | ❌ 未开始 | 0% |
+| Phase 4 | 22-32h | ❌ 未开始 | 0% |
+| Phase 5 | 23-33h | ❌ 未开始 | 0% |
+| Phase 6 | 20-30h | ❌ 未开始 | 0% |
+| **总计** | **187-275h** | **已完成 104-152h** | **55-56%** |
+
+---
+
+## 🚀 已完成功能亮点
+
+### Phase 0: 业务规则矩阵
+- ✅ 平台经营模式矩阵（`docs/business-rules/platform-mode-matrix.md`）
+- ✅ 平台内容规则矩阵（`docs/business-rules/platform-content-rules.md`）
+- ✅ SKU 激活规则（`docs/business-rules/sku-activation-rules.md`）
+
+### Phase 1: ERP Lite 核心实现
+- ✅ `ProductMaster / ProductVariant` 模型（`backend/app/db/models.py:706`, `backend/app/db/models.py:732`）
+- ✅ `Supplier / SupplierOffer` 模型（`backend/app/db/models.py:691-741`）
+- ✅ `PurchaseOrder / InboundShipment` 模型（`backend/app/db/models.py:744-825`）
+- ✅ `InventoryLevel / InventoryReservation` 模型（`backend/app/db/models.py:827-870`）
+- ✅ `CandidateConversionService` 候选转 SKU 服务
+- ✅ `ProductMasterService` 商品主数据服务
+- ✅ `SupplierMasterService` 供应商主数据服务
+- ✅ `ProcurementService` 采购服务
+- ✅ `InventoryAllocator` 库存分配服务
+- ✅ `ListingActivationService` Listing 激活服务
+- ✅ `DirectorWorkflow` 集成候选 → SKU 转换链路
+- ✅ 数据库迁移 007_erp_lite_procurement, 008_inventory_reservation
+
+### Phase 2: 素材与本地化体系
+- ✅ `ContentAsset` 扩展（`usage_scope`, `language_tags`, `spec`, `compliance_tags`）
+- ✅ `LocalizationContent` 多语言内容模型
+- ✅ `PlatformContentRule` 平台内容规则模型
+- ✅ `LocalizationService` 本地化内容服务
+- ✅ `PlatformAssetAdapter` 素材验证与选择服务
+- ✅ `TextOverlayService` 文字覆盖服务
+- ✅ `AssetDerivationService` 素材派生服务（resize / convert_format / overlay_localized_text / regenerate）
+- ✅ `ImageRegenerationService` ComfyUI 图像重生成服务
+- ✅ `DirectorWorkflow` 集成基础素材生成
+- ✅ `PlatformPublisherAgent` 集成平台素材选择与按需派生
+- ✅ 数据库迁移 009_content_asset_extensions, 010_localization_content, 011_platform_content_rule
 
 ---
 
 ## 🔗 相关文档
 
+### 业务规则矩阵（Phase 0 产出）
+- [平台经营模式矩阵](../business-rules/platform-mode-matrix.md)
+- [平台内容规则矩阵](../business-rules/platform-content-rules.md)
+- [SKU 激活规则](../business-rules/sku-activation-rules.md)
+
+### 实施任务清单
 - [Stage 3 实施任务清单](stage3-implementation-tasks.md)
 - [Stage 3 开发 Backlog](stage3-development-backlog.md)
 - [Stage 4 实施任务清单](stage4-implementation-tasks.md)
 - [Stage 4 开发 Backlog](stage4-development-backlog.md)
 - [Stage 5 实施任务清单](stage5-implementation-tasks.md)
 - [Stage 6 实施任务清单](stage6-implementation-tasks.md)
+
+### 架构与流程
 - [研发路线图 2026](engineering-roadmap-2026.md)
 - [核心业务流程](../workflows/core-business-flows.md)
+- [项目状态报告](../PROJECT_STATUS.md)
 
 ---
 
 **最后更新**: 2026-03-29
-**文档状态**: 待实施
+**文档状态**: ⚠️ 部分实施中（Phase 0-2 已完成，Phase 3-6 待实施）
 **维护者**: Deyes 研发团队

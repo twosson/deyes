@@ -5,7 +5,7 @@
 > 版本: v1.1
 > 创建时间: 2026-03-29
 > 更新时间: 2026-03-29
-> 状态: ⚠️ 部分实施中（Phase 0-2 已完成，Phase 3-6 待实施）
+> 状态: ⚠️ 部分实施中（Phase 0-3 已完成，Phase 4-6 待实施）
 
 ---
 
@@ -416,24 +416,35 @@ if sku.inventory_mode == "stock_first":
 
 #### 要做
 
-**1. 新增统一发布服务（10-14h）**
-- 新增 `PlatformRegistry`
-- 新增 `UnifiedListingService`
-- 实现平台适配器注册与解析
-- 实现统一 listing 创建/更新/同步接口
+**1. inventory_mode 推断逻辑（4-6h）**
+- ✅ 实现 `_resolve_inventory_mode()` 方法
+- ✅ 实现 `_infer_inventory_mode_from_platform()` 方法
+- ✅ 平台分类：PRE_ORDER (temu, aliexpress, tiktok_shop, shopee, mercado_libre) vs STOCK_FIRST (amazon, walmart, ozon, etc.)
 
-**2. 发布前判定逻辑（8-12h）**
-- 实现 `pre_order` 激活条件判定
-- 实现 `stock_first` 激活条件判定
-- 实现 listing 状态机
-- 实现库存不足时自动暂停逻辑
+**2. 激活服务集成（6-8h）**
+- ✅ 修改 `PlatformPublisherAgent._publish_to_platform()` 集成激活判定
+- ✅ Listing 初始状态改为 PENDING，激活后变为 ACTIVE
+- ✅ 修改 `ListingActivationService` 优先读取 `listing.inventory_mode`（支持双模式）
+
+**3. 双模式集成测试（8-12h）**
+- ✅ 创建 `test_dual_mode_phase3_integration.py`
+- ✅ 测试同一 SKU 双平台双模式发布
+- ✅ 测试 PRE_ORDER 激活失败（无供应商报价）
+- ✅ 测试 STOCK_FIRST 激活失败（库存不足）
 
 #### 验收标准
-- [ ] 同一 SKU 可同时有 Temu `pre_order` listing 和 Amazon `stock_first` listing
-- [ ] 两个 listing 共用商品主数据，但激活规则不同
-- [ ] `pre_order` listing 可 0 库存激活
-- [ ] `stock_first` listing 需库存达标才激活
-- [ ] 测试通过
+- [x] 同一 SKU 可同时有 Temu `pre_order` listing 和 Amazon `stock_first` listing
+- [x] 两个 listing 共用商品主数据，但激活规则不同
+- [x] `pre_order` listing 可 0 库存激活
+- [x] `stock_first` listing 需库存达标才激活
+- [x] 测试通过
+
+**实施状态**: ✅ 已完成（2026-03-29）
+
+**实现位置**:
+- `PlatformPublisherAgent` 修改: `backend/app/agents/platform_publisher.py:217-218`, `backend/app/agents/platform_publisher.py:246-291`, `backend/app/agents/platform_publisher.py:492-523`
+- `ListingActivationService` 修改: `backend/app/services/listing_activation_service.py:103-104`
+- 集成测试: `backend/tests/test_dual_mode_phase3_integration.py`
 
 #### 参考文档
 - `docs/roadmap/stage5-implementation-tasks.md` (A1-A4)
@@ -578,11 +589,11 @@ if sku.inventory_mode == "stock_first":
 | Phase 0 | 1-2 天 | ✅ 已完成 | 100% |
 | Phase 1 | 80-116h | ✅ 已完成 | 100% |
 | Phase 2 | 24-36h | ✅ 已完成 | 100% |
-| Phase 3 | 18-26h | ❌ 未开始 | 0% |
+| Phase 3 | 18-26h | ✅ 已完成 | 100% |
 | Phase 4 | 22-32h | ❌ 未开始 | 0% |
 | Phase 5 | 23-33h | ❌ 未开始 | 0% |
 | Phase 6 | 20-30h | ❌ 未开始 | 0% |
-| **总计** | **187-275h** | **已完成 104-152h** | **55-56%** |
+| **总计** | **187-275h** | **已完成 122-178h** | **65-67%** |
 
 ---
 
@@ -620,6 +631,14 @@ if sku.inventory_mode == "stock_first":
 - ✅ `PlatformPublisherAgent` 集成平台素材选择与按需派生
 - ✅ 数据库迁移 009_content_asset_extensions, 010_localization_content, 011_platform_content_rule
 
+### Phase 3: 双模式发布编排
+- ✅ `PlatformPublisherAgent` inventory_mode 推断逻辑（`_resolve_inventory_mode`, `_infer_inventory_mode_from_platform`）
+- ✅ `ListingActivationService` 优先读取 `listing.inventory_mode`（支持同一 SKU 双模式）
+- ✅ Listing 创建后自动检查激活条件
+- ✅ PRE_ORDER 模式：需供应商报价，允许 0 库存激活
+- ✅ STOCK_FIRST 模式：需库存达标才激活
+- ✅ 双模式集成测试（`test_dual_mode_phase3_integration.py`）
+
 ---
 
 ## 🔗 相关文档
@@ -645,5 +664,5 @@ if sku.inventory_mode == "stock_first":
 ---
 
 **最后更新**: 2026-03-29
-**文档状态**: ⚠️ 部分实施中（Phase 0-2 已完成，Phase 3-6 待实施）
+**文档状态**: ⚠️ 部分实施中（Phase 0-3 已完成，Phase 4-6 待实施）
 **维护者**: Deyes 研发团队

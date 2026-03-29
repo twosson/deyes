@@ -17,8 +17,8 @@ from uuid import UUID, uuid4
 from sqlalchemy import select
 
 from app.agents.base.agent import AgentContext, AgentResult, BaseAgent
-from app.core.enums import AssetType, ContentUsageScope, PlatformListingStatus, ProductLifecycle, TargetPlatform
-from app.db.models import CandidateProduct, ContentAsset, ListingAssetAssociation, PlatformListing
+from app.core.enums import AssetType, ContentUsageScope, InventoryMode, PlatformListingStatus, ProductLifecycle, TargetPlatform
+from app.db.models import CandidateProduct, ContentAsset, ListingAssetAssociation, PlatformListing, ProductVariant
 from app.services.listing_metrics_service import ListingMetricsService
 from app.services.platform_sync_service import PlatformSyncService
 from app.services.platforms import PlatformAdapter, get_platform_adapter
@@ -214,6 +214,9 @@ class PlatformPublisherAgent(BaseAgent):
         # Resolve variant_id for asset selection
         variant_id = await self._resolve_variant_id(candidate, context.db)
 
+        # Determine inventory_mode: prefer variant mode, otherwise infer from platform
+        inventory_mode = await self._resolve_inventory_mode(variant_id, platform_name, context.db)
+
         # Select best assets using PlatformAssetAdapter
         platform_assets = await self._select_platform_assets(
             variant_id=variant_id,
@@ -240,11 +243,12 @@ class PlatformPublisherAgent(BaseAgent):
             category=candidate.category,
         )
 
-        # Create PlatformListing record
+        # Create PlatformListing record with PENDING status initially
         listing = PlatformListing(
             id=uuid4(),
             candidate_product_id=candidate.id,
             product_variant_id=variant_id,
+            inventory_mode=inventory_mode,
             platform=TargetPlatform(platform_name),
             region=region,
             platform_listing_id=listing_data.platform_listing_id,
@@ -252,12 +256,39 @@ class PlatformPublisherAgent(BaseAgent):
             price=price,
             currency=currency,
             inventory=inventory,
-            status=listing_data.status,
+            status=PlatformListingStatus.PENDING,  # Start as PENDING, activation service will update
             platform_data=listing_data.platform_data,
         )
 
         context.db.add(listing)
         await context.db.flush()
+
+        # Check activation eligibility and activate if eligible
+        from app.services.listing_activation_service import ListingActivationService
+
+        activation_service = ListingActivationService()
+        activated, reason = await activation_service.activate_listing_if_eligible(
+            db=context.db,
+            listing_id=listing.id,
+        )
+
+        if activated:
+            self.logger.info(
+                "listing_activated_on_creation",
+                listing_id=str(listing.id),
+                platform=platform_name,
+                region=region,
+                inventory_mode=inventory_mode.value if inventory_mode else None,
+            )
+        else:
+            self.logger.warning(
+                "listing_activation_deferred",
+                listing_id=str(listing.id),
+                platform=platform_name,
+                region=region,
+                inventory_mode=inventory_mode.value if inventory_mode else None,
+                reason=reason,
+            )
 
         # Create asset associations
         for i, asset in enumerate(platform_assets):
@@ -457,6 +488,50 @@ class PlatformPublisherAgent(BaseAgent):
         variant = result.scalar_one_or_none()
 
         return variant.id if variant else None
+
+    async def _resolve_inventory_mode(
+        self,
+        variant_id: UUID | None,
+        platform: str,
+        db,
+    ) -> InventoryMode:
+        """Resolve listing inventory mode for platform publishing.
+
+        Phase 3 requires the same variant/SKU to support different operating modes
+        on different platforms, so publishing uses a platform-level default for the
+        listing itself. If the platform cannot be inferred, fall back to variant mode.
+        """
+        inferred_mode = self._infer_inventory_mode_from_platform(platform)
+        if inferred_mode:
+            return inferred_mode
+
+        if variant_id:
+            variant = await db.get(ProductVariant, variant_id)
+            if variant and variant.inventory_mode:
+                return variant.inventory_mode
+
+        return InventoryMode.STOCK_FIRST
+
+    def _infer_inventory_mode_from_platform(self, platform: str) -> InventoryMode:
+        """Infer inventory mode from platform default.
+
+        Args:
+            platform: Platform name
+
+        Returns:
+            InventoryMode for the platform default operating mode
+        """
+        pre_order_platforms = {
+            "temu",
+            "aliexpress",
+            "tiktok_shop",
+            "shopee",
+            "mercado_libre",
+        }
+
+        if platform.lower() in pre_order_platforms:
+            return InventoryMode.PRE_ORDER
+        return InventoryMode.STOCK_FIRST
 
     def _infer_language_from_region(self, region: str) -> str:
         """Infer language code from region.

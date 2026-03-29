@@ -218,3 +218,50 @@ class LocalizationType(str, Enum):
     BULLET_POINTS = "bullet_points"  # 卖点
     IMAGE_TEXT = "image_text"  # 图片文字
     SEO_KEYWORDS = "seo_keywords"  # SEO 关键词
+
+
+class OrderStatus(str, Enum):
+    """Platform order status."""
+    PENDING = "pending"
+    CONFIRMED = "confirmed"
+    SHIPPED = "shipped"
+    DELIVERED = "delivered"
+    CANCELLED = "cancelled"
+    REFUNDED = "refunded"
+    PARTIALLY_REFUNDED = "partially_refunded"
+
+
+class OrderLineStatus(str, Enum):
+    """Order line item status."""
+    PENDING = "pending"
+    CONFIRMED = "confirmed"
+    SHIPPED = "shipped"
+    DELIVERED = "delivered"
+    CANCELLED = "cancelled"
+    REFUNDED = "refunded"
+
+
+class FulfillmentStatus(str, Enum):
+    """Fulfillment status."""
+    UNFULFILLED = "unfulfilled"
+    PARTIALLY_FULFILLED = "partially_fulfilled"
+    FULFILLED = "fulfilled"
+
+
+class RefundReason(str, Enum):
+    """Refund reason categories."""
+    QUALITY_ISSUE = "quality_issue"
+    LOGISTICS_ISSUE = "logistics_issue"
+    DESCRIPTION_MISMATCH = "description_mismatch"
+    DAMAGED = "damaged"
+    WRONG_ITEM = "wrong_item"
+    CHANGED_MIND = "changed_mind"
+    OTHER = "other"
+
+
+class RefundStatus(str, Enum):
+    """Refund case status."""
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    COMPLETED = "completed"

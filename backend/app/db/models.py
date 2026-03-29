@@ -27,17 +27,22 @@ from app.core.enums import (
     ContentUsageScope,
     ExperimentStatus,
     FeedbackAction,
+    FulfillmentStatus,
     InboundShipmentStatus,
     InventoryMode,
     InventoryMovementType,
     InventoryReservationStatus,
     LocalizationType,
+    OrderLineStatus,
+    OrderStatus,
     PlatformListingStatus,
     ProductLifecycle,
     ProductMasterStatus,
     ProductVariantStatus,
     ProfitabilityDecision,
     PurchaseOrderStatus,
+    RefundReason,
+    RefundStatus,
     RiskDecision,
     SourcePlatform,
     StrategyRunStatus,
@@ -973,3 +978,169 @@ class InventoryMovement(Base, TimestampMixin):
 
     # Relationships
     inbound_shipment: Mapped[Optional["InboundShipment"]] = relationship(back_populates="movements")
+
+
+# ============================================================================
+# Phase 4: Order/Fulfillment/Inventory Integration
+# ============================================================================
+
+
+class PlatformOrder(Base, UpdateTimestampMixin):
+    """Customer order from a sales platform (Temu, Amazon, etc.)."""
+
+    __tablename__ = "platform_orders"
+    __table_args__ = (Index("uq_platform_order", "platform", "platform_order_id", unique=True),)
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    platform: Mapped[TargetPlatform] = mapped_column(SAEnum(TargetPlatform, native_enum=False), nullable=False, index=True)
+    region: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+
+    # Platform order ID
+    platform_order_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+
+    # Order metadata
+    order_status: Mapped[OrderStatus] = mapped_column(SAEnum(OrderStatus, native_enum=False), nullable=False, default=OrderStatus.PENDING)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    buyer_country: Mapped[Optional[str]] = mapped_column(String(10))
+    total_amount: Mapped[Decimal] = mapped_column(DECIMAL(12, 2), nullable=False)
+
+    # Timestamps
+    ordered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    paid_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    shipped_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    delivered_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+    # Relationships
+    lines: Mapped[list["PlatformOrderLine"]] = relationship(back_populates="order", cascade="all, delete-orphan")
+    fulfillment_records: Mapped[list["FulfillmentRecord"]] = relationship(back_populates="order")
+
+
+class PlatformOrderLine(Base, UpdateTimestampMixin):
+    """Line item in a platform order."""
+
+    __tablename__ = "platform_order_lines"
+    __table_args__ = (Index("uq_platform_order_line", "order_id", "platform_sku", unique=True),)
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    order_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("platform_orders.id"), nullable=False, index=True)
+
+    # SKU/Listing mapping
+    platform_listing_id: Mapped[Optional[UUID]] = mapped_column(PGUUID(as_uuid=True), ForeignKey("platform_listings.id"), index=True)
+    product_variant_id: Mapped[Optional[UUID]] = mapped_column(PGUUID(as_uuid=True), ForeignKey("product_variants.id"), index=True)
+    platform_sku: Mapped[str] = mapped_column(String(100), nullable=False)
+
+    # Line item details
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    unit_price: Mapped[Decimal] = mapped_column(DECIMAL(10, 2), nullable=False)
+    gross_revenue: Mapped[Decimal] = mapped_column(DECIMAL(12, 2), nullable=False)
+    discount_amount: Mapped[Decimal] = mapped_column(DECIMAL(12, 2), default=Decimal("0.00"))
+    line_status: Mapped[OrderLineStatus] = mapped_column(SAEnum(OrderLineStatus, native_enum=False), nullable=False, default=OrderLineStatus.PENDING)
+
+    # Relationships
+    order: Mapped["PlatformOrder"] = relationship(back_populates="lines")
+    platform_listing: Mapped[Optional["PlatformListing"]] = relationship()
+    product_variant: Mapped[Optional["ProductVariant"]] = relationship()
+    fulfillment_records: Mapped[list["FulfillmentRecord"]] = relationship(back_populates="order_line")
+
+
+class FulfillmentRecord(Base, UpdateTimestampMixin):
+    """Fulfillment tracking for orders."""
+
+    __tablename__ = "fulfillment_records"
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    order_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("platform_orders.id"), nullable=False, index=True)
+    order_line_id: Mapped[Optional[UUID]] = mapped_column(PGUUID(as_uuid=True), ForeignKey("platform_order_lines.id"), index=True)
+
+    fulfillment_status: Mapped[FulfillmentStatus] = mapped_column(SAEnum(FulfillmentStatus, native_enum=False), nullable=False, default=FulfillmentStatus.UNFULFILLED)
+    carrier: Mapped[Optional[str]] = mapped_column(String(100))
+    tracking_number: Mapped[Optional[str]] = mapped_column(String(255))
+    shipped_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    delivered_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+    # Relationships
+    order: Mapped["PlatformOrder"] = relationship(back_populates="fulfillment_records")
+    order_line: Mapped[Optional["PlatformOrderLine"]] = relationship(back_populates="fulfillment_records")
+
+
+class RefundCase(Base, UpdateTimestampMixin):
+    """Refund case from a platform order."""
+
+    __tablename__ = "refund_cases"
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    platform_order_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("platform_orders.id"), nullable=False, index=True)
+    platform_order_line_id: Mapped[Optional[UUID]] = mapped_column(PGUUID(as_uuid=True), ForeignKey("platform_order_lines.id"), index=True)
+    product_variant_id: Mapped[Optional[UUID]] = mapped_column(PGUUID(as_uuid=True), ForeignKey("product_variants.id"), index=True)
+
+    refund_amount: Mapped[Decimal] = mapped_column(DECIMAL(12, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    refund_reason: Mapped[RefundReason] = mapped_column(SAEnum(RefundReason, native_enum=False), nullable=False)
+    refund_status: Mapped[RefundStatus] = mapped_column(SAEnum(RefundStatus, native_enum=False), nullable=False, default=RefundStatus.PENDING)
+
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+    # Issue classification
+    issue_type: Mapped[Optional[str]] = mapped_column(String(50))
+    attributed_to: Mapped[Optional[str]] = mapped_column(String(100))
+
+    # Relationships
+    order: Mapped["PlatformOrder"] = relationship()
+    order_line: Mapped[Optional["PlatformOrderLine"]] = relationship()
+    variant: Mapped[Optional["ProductVariant"]] = relationship()
+
+
+class SettlementEntry(Base, UpdateTimestampMixin):
+    """Platform settlement entry (fees, payouts, adjustments)."""
+
+    __tablename__ = "settlement_entries"
+    __table_args__ = (Index("uq_settlement_entry", "platform_order_line_id", "entry_type", unique=True),)
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    platform_order_line_id: Mapped[Optional[UUID]] = mapped_column(PGUUID(as_uuid=True), ForeignKey("platform_order_lines.id"), index=True)
+    product_variant_id: Mapped[Optional[UUID]] = mapped_column(PGUUID(as_uuid=True), ForeignKey("product_variants.id"), index=True)
+
+    entry_type: Mapped[str] = mapped_column(String(50), nullable=False)  # PLATFORM_FEE, REFUND, ADJUSTMENT, PAYOUT
+    amount: Mapped[Decimal] = mapped_column(DECIMAL(12, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    source_payload: Mapped[Optional[dict]] = mapped_column(JSON)
+
+    # Relationships
+    order_line: Mapped[Optional["PlatformOrderLine"]] = relationship()
+    variant: Mapped[Optional["ProductVariant"]] = relationship()
+
+
+class ProfitLedger(Base, UpdateTimestampMixin):
+    """True profit ledger per SKU/order line."""
+
+    __tablename__ = "profit_ledger"
+    __table_args__ = (Index("uq_profit_ledger", "product_variant_id", "platform_order_line_id", unique=True),)
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    product_variant_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("product_variants.id"), nullable=False, index=True)
+    platform_order_line_id: Mapped[Optional[UUID]] = mapped_column(PGUUID(as_uuid=True), ForeignKey("platform_order_lines.id"), index=True)
+    platform_listing_id: Mapped[Optional[UUID]] = mapped_column(PGUUID(as_uuid=True), ForeignKey("platform_listings.id"), index=True)
+
+    # Revenue
+    gross_revenue: Mapped[Decimal] = mapped_column(DECIMAL(12, 2), default=Decimal("0.00"))
+
+    # Costs
+    platform_fee: Mapped[Decimal] = mapped_column(DECIMAL(12, 2), default=Decimal("0.00"))
+    refund_loss: Mapped[Decimal] = mapped_column(DECIMAL(12, 2), default=Decimal("0.00"))
+    ad_cost: Mapped[Decimal] = mapped_column(DECIMAL(12, 2), default=Decimal("0.00"))
+    fulfillment_cost: Mapped[Decimal] = mapped_column(DECIMAL(12, 2), default=Decimal("0.00"))
+
+    # Calculated
+    net_profit: Mapped[Decimal] = mapped_column(DECIMAL(12, 2), default=Decimal("0.00"))
+    profit_margin: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(5, 2))  # percentage
+
+    # Snapshot date
+    snapshot_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+
+    # Relationships
+    variant: Mapped["ProductVariant"] = relationship()
+    order_line: Mapped[Optional["PlatformOrderLine"]] = relationship()
+    listing: Mapped[Optional["PlatformListing"]] = relationship()

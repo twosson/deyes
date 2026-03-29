@@ -100,7 +100,8 @@ class ListingActivationService:
                 has_supplier_offer=False,
             )
 
-        inventory_mode = variant.inventory_mode
+        # Determine inventory_mode: prioritize listing mode, fall back to variant mode
+        inventory_mode = listing.inventory_mode or variant.inventory_mode
         if not inventory_mode:
             return ActivationEligibility(
                 eligible=False,

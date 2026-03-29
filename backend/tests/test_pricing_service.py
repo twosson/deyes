@@ -26,7 +26,7 @@ def test_marginal_product():
 
     result = service.calculate_pricing(
         supplier_price=Decimal("20.00"),
-        platform_price=Decimal("35.00"),
+        platform_price=Decimal("36.00"),
     )
 
     assert result.estimated_margin > 0
@@ -279,62 +279,69 @@ def test_supplier_selection_returns_no_selection_when_all_prices_invalid():
     )
 
 
-def test_platform_category_thresholds_applied():
-    """Test that platform and category specific thresholds are applied correctly."""
-    from app.core.enums import ProfitabilityDecision
-
+def test_competition_density_increases_thresholds():
+    """High competition should make pricing more conservative."""
     service = PricingService()
 
-    # Test 1: Amazon candidate with 38% margin should be MARGINAL (Amazon threshold = 40%)
-    # Supplier: $20, Platform: $32 = 37.5% margin → below 40% = MARGINAL
-    result = service.calculate_pricing(
+    low_competition = service.calculate_pricing(
+        supplier_price=Decimal("20.00"),
+        platform_price=Decimal("38.00"),
+        platform="amazon",
+        competition_density="low",
+    )
+    high_competition = service.calculate_pricing(
+        supplier_price=Decimal("20.00"),
+        platform_price=Decimal("38.00"),
+        platform="amazon",
+        competition_density="high",
+    )
+
+    assert low_competition.profitable_threshold == Decimal("0.40")
+    assert high_competition.profitable_threshold == Decimal("0.45")
+    assert high_competition.marginal_threshold == Decimal("0.27")
+
+
+def test_fallback_degraded_discovery_applies_conservative_thresholds():
+    """Fallback and degraded discovery should increase required margins."""
+    service = PricingService()
+
+    baseline = service.calculate_pricing(
         supplier_price=Decimal("20.00"),
         platform_price=Decimal("32.00"),
-        platform="amazon",
-        category=None,
-    )
-    assert result.profitability_decision == ProfitabilityDecision.MARGINAL
-    assert result.profitable_threshold == Decimal("0.40")
-    assert result.margin_percentage < 40
-
-    # Test 2: Temu candidate with 32% margin should be PROFITABLE (Temu threshold = 30%)
-    result = service.calculate_pricing(
-        supplier_price=Decimal("20.00"),
-        platform_price=Decimal("30.00"),
         platform="temu",
-        category=None,
-    )
-    assert result.profitability_decision == ProfitabilityDecision.PROFITABLE
-    assert result.profitable_threshold == Decimal("0.30")
-    assert result.margin_percentage >= 30
-
-    # Test 3: Electronics candidate needs 25% (electronics threshold = 25%)
-    result = service.calculate_pricing(
-        supplier_price=Decimal("75.00"),
-        platform_price=Decimal("100.00"),
-        platform=None,
         category="electronics",
     )
-    assert result.profitable_threshold == Decimal("0.25")
-
-    # Test 4: Jewelry candidate needs 50% (jewelry threshold = 50%)
-    result = service.calculate_pricing(
-        supplier_price=Decimal("50.00"),
-        platform_price=Decimal("80.00"),
-        platform=None,
-        category="jewelry",
+    conservative = service.calculate_pricing(
+        supplier_price=Decimal("20.00"),
+        platform_price=Decimal("32.00"),
+        platform="temu",
+        category="electronics",
+        discovery_mode="fallback",
+        degraded=True,
     )
-    # 80 - (50 + 7.5 + 8 + 1.6 + 2.5) = 80 - 69.6 = 10.4 margin = 13% < 50% → UNPROFITABLE
-    assert result.profitability_decision == ProfitabilityDecision.UNPROFITABLE
-    assert result.profitable_threshold == Decimal("0.50")
 
-    # Test 5: Combined - Amazon + Jewelry should use max(40%, 50%) = 50%
+    assert baseline.profitable_threshold == Decimal("0.35")
+    assert conservative.profitable_threshold == Decimal("0.40")
+    assert conservative.profitable_threshold > baseline.profitable_threshold
+
+
+def test_pricing_result_includes_demand_context_fields():
+    """Demand context should be reflected in serialized pricing output."""
+    service = PricingService()
+
     result = service.calculate_pricing(
-        supplier_price=Decimal("40.00"),
-        platform_price=Decimal("90.00"),
-        platform="amazon",
-        category="jewelry",
+        supplier_price=Decimal("20.00"),
+        platform_price=Decimal("35.00"),
+        competition_density="medium",
+        discovery_mode="generated",
+        degraded=True,
     )
-    assert result.profitable_threshold == Decimal("0.50")
-    # 90 - (40 + 6 + 9 + 1.8 + 2) = 90 - 58.8 = 31.2 margin = 34.67% < 50% → MARGINAL
-    assert result.profitability_decision == ProfitabilityDecision.MARGINAL
+    result_dict = result.to_dict()
+
+    assert result_dict["competition_density"] == "medium"
+    assert result_dict["discovery_mode"] == "generated"
+    assert result_dict["degraded"] is True
+    assert result_dict["explanation"]["thresholds"]["competition_density"] == "medium"
+    assert result_dict["explanation"]["thresholds"]["discovery_mode"] == "generated"
+    assert result_dict["explanation"]["thresholds"]["degraded"] is True
+

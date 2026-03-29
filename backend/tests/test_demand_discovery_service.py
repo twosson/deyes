@@ -138,6 +138,8 @@ class TestDemandDiscoveryService:
             ),
         ]
 
+        demand_discovery_service.logger = MagicMock()
+
         # Act
         result = await demand_discovery_service.discover_keywords(
             category="electronics",
@@ -155,6 +157,27 @@ class TestDemandDiscoveryService:
         assert result.rejected_keywords[0].keyword == "bad keyword"
         assert result.fallback_used is False
         assert result.degraded is True  # User keywords failed
+        demand_discovery_service.logger.info.assert_any_call(
+            "demand_discovery_metrics",
+            category="electronics",
+            region="US",
+            platform=None,
+            discovery_mode="generated",
+            success=True,
+            skip=False,
+            fallback_used=False,
+            degraded=True,
+            generated_recovery=True,
+            validated_fallback=False,
+            validated_keywords_count=1,
+            rejected_keywords_count=1,
+            avg_validated_keywords_count=1,
+            discovery_success_rate=1.0,
+            generated_recovery_rate=1.0,
+            validated_fallback_rate=0.0,
+            skip_rate=0.0,
+            selection_triggered_per_category=1,
+        )
 
     @pytest.mark.asyncio
     async def test_no_user_keywords_triggers_generation(
@@ -397,6 +420,7 @@ class TestDemandDiscoveryService:
             keywords=["smart watch"],
             category="electronics",
             region="DE",
+            platform=None,
         )
 
     @pytest.mark.asyncio

@@ -17,7 +17,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import select
 
 from app.agents.base.agent import AgentContext, AgentResult, BaseAgent
-from app.core.enums import AssetType, PlatformListingStatus, ProductLifecycle, TargetPlatform
+from app.core.enums import AssetType, ContentUsageScope, PlatformListingStatus, ProductLifecycle, TargetPlatform
 from app.db.models import CandidateProduct, ContentAsset, ListingAssetAssociation, PlatformListing
 from app.services.listing_metrics_service import ListingMetricsService
 from app.services.platform_sync_service import PlatformSyncService
@@ -211,16 +211,21 @@ class PlatformPublisherAgent(BaseAgent):
         # Get initial inventory
         inventory = self._calculate_initial_inventory(candidate, platform_name)
 
-        # Filter assets for this platform
-        platform_assets = self._filter_assets_for_platform(assets, platform_name, region)
+        # Resolve variant_id for asset selection
+        variant_id = await self._resolve_variant_id(candidate, context.db)
+
+        # Select best assets using PlatformAssetAdapter
+        platform_assets = await self._select_platform_assets(
+            variant_id=variant_id,
+            candidate=candidate,
+            platform=TargetPlatform(platform_name),
+            region=region,
+            fallback_assets=assets,
+            context=context,
+        )
 
         if not platform_assets:
-            self.logger.warning(
-                "no_assets_for_platform",
-                platform=platform_name,
-                region=region,
-            )
-            platform_assets = assets  # Fallback to all assets
+            raise ValueError(f"No compliant assets available for platform {platform_name}")
 
         # Create listing on platform
         listing_data = await adapter.create_listing(
@@ -239,6 +244,7 @@ class PlatformPublisherAgent(BaseAgent):
         listing = PlatformListing(
             id=uuid4(),
             candidate_product_id=candidate.id,
+            product_variant_id=variant_id,
             platform=TargetPlatform(platform_name),
             region=region,
             platform_listing_id=listing_data.platform_listing_id,
@@ -428,6 +434,219 @@ class PlatformPublisherAgent(BaseAgent):
             success=False,
             error_message=str(error),
         )
+
+    async def _resolve_variant_id(
+        self,
+        candidate: CandidateProduct,
+        db,
+    ) -> UUID | None:
+        """Resolve variant_id from candidate product.
+
+        Returns:
+            variant_id if found, None otherwise
+        """
+        from sqlalchemy import select
+
+        from app.db.models import ProductMaster, ProductVariant
+
+        # Try to find variant via master
+        stmt = select(ProductVariant).join(ProductMaster).where(
+            ProductMaster.candidate_product_id == candidate.id
+        )
+        result = await db.execute(stmt)
+        variant = result.scalar_one_or_none()
+
+        return variant.id if variant else None
+
+    def _infer_language_from_region(self, region: str) -> str:
+        """Infer language code from region.
+
+        Args:
+            region: Region code (e.g., "us", "uk", "de")
+
+        Returns:
+            Language code (e.g., "en", "de", "ja")
+        """
+        region_language_map = {
+            "us": "en",
+            "uk": "en",
+            "ca": "en",
+            "au": "en",
+            "de": "de",
+            "fr": "fr",
+            "es": "es",
+            "it": "it",
+            "ru": "ru",
+            "jp": "ja",
+            "cn": "zh",
+            "br": "pt",
+            "mx": "es",
+        }
+        return region_language_map.get(region, "en")
+
+    async def _select_platform_assets(
+        self,
+        *,
+        variant_id: UUID | None,
+        candidate: CandidateProduct,
+        platform: TargetPlatform,
+        region: str,
+        fallback_assets: list[ContentAsset],
+        context: AgentContext,
+    ) -> list[ContentAsset]:
+        """Select best assets for platform using PlatformAssetAdapter.
+
+        Strategy:
+        1. If variant_id exists, use select_best_asset() for MAIN_IMAGE
+        2. If no compliant asset, trigger on-demand derivation
+        3. Fall back to legacy filter if no variant or derivation fails
+        """
+        from app.services.platform_asset_adapter import PlatformAssetAdapter
+
+        selected_assets = []
+
+        # If no variant, fall back to legacy filter
+        if not variant_id:
+            self.logger.warning(
+                "no_variant_id_fallback_to_legacy",
+                candidate_id=str(candidate.id),
+                platform=platform.value,
+            )
+            return self._filter_assets_for_platform(fallback_assets, platform.value, region)
+
+        # Infer language from region
+        language = self._infer_language_from_region(region)
+
+        # Use PlatformAssetAdapter to select best asset
+        adapter = PlatformAssetAdapter()
+        main_asset = await adapter.select_best_asset(
+            variant_id=variant_id,
+            platform=platform,
+            asset_type=AssetType.MAIN_IMAGE,
+            db=context.db,
+            language=language,
+        )
+
+        # If no asset found or asset is BASE and not compliant, try derivation
+        if not main_asset or main_asset.usage_scope == ContentUsageScope.BASE:
+            if main_asset:
+                # Validate BASE asset compliance
+                validation = await adapter.validate_asset_compliance(
+                    asset=main_asset,
+                    platform=platform,
+                    db=context.db,
+                )
+
+                if not validation["valid"]:
+                    self.logger.info(
+                        "base_asset_not_compliant_triggering_derivation",
+                        asset_id=str(main_asset.id),
+                        platform=platform.value,
+                        violations=validation["violations"],
+                    )
+
+                    # Trigger on-demand derivation
+                    derivation_result = await self._derive_asset_on_demand(
+                        variant_id=variant_id,
+                        platform=platform,
+                        language=language,
+                        context=context,
+                    )
+
+                    if derivation_result["success"]:
+                        # Re-select after derivation
+                        main_asset = await adapter.select_best_asset(
+                            variant_id=variant_id,
+                            platform=platform,
+                            asset_type=AssetType.MAIN_IMAGE,
+                            db=context.db,
+                            language=language,
+                        )
+
+        if main_asset:
+            selected_assets.append(main_asset)
+        else:
+            # Final fallback to legacy filter
+            self.logger.warning(
+                "no_compliant_asset_fallback_to_legacy",
+                variant_id=str(variant_id),
+                platform=platform.value,
+            )
+            return self._filter_assets_for_platform(fallback_assets, platform.value, region)
+
+        return selected_assets
+
+    async def _derive_asset_on_demand(
+        self,
+        *,
+        variant_id: UUID,
+        platform: TargetPlatform,
+        language: str,
+        context: AgentContext,
+    ) -> dict:
+        """Trigger on-demand asset derivation.
+
+        Returns:
+            Dict with {"success": bool, "asset_id": str | None}
+        """
+        from app.agents.content_asset_manager import ContentAssetManagerAgent
+
+        try:
+            self.logger.info(
+                "on_demand_derivation_started",
+                variant_id=str(variant_id),
+                platform=platform.value,
+                language=language,
+            )
+
+            # Create ContentAssetManagerAgent
+            asset_manager = ContentAssetManagerAgent()
+
+            # Create derivation context
+            derivation_context = AgentContext(
+                strategy_run_id=context.strategy_run_id,
+                db=context.db,
+                input_data={
+                    "action": "generate_platform_assets",
+                    "variant_id": str(variant_id),
+                    "platform": platform.value,
+                    "asset_types": ["main_image"],
+                    "language": language,
+                },
+            )
+
+            # Execute derivation
+            result = await asset_manager.execute(derivation_context)
+
+            if result.success and result.output_data.get("assets_created", 0) > 0:
+                asset_ids = result.output_data.get("asset_ids", [])
+                self.logger.info(
+                    "on_demand_derivation_success",
+                    variant_id=str(variant_id),
+                    platform=platform.value,
+                    asset_ids=asset_ids,
+                )
+                return {
+                    "success": True,
+                    "asset_id": asset_ids[0] if asset_ids else None,
+                }
+            else:
+                self.logger.warning(
+                    "on_demand_derivation_failed",
+                    variant_id=str(variant_id),
+                    platform=platform.value,
+                    error=result.error_message,
+                )
+                return {"success": False}
+
+        except Exception as e:
+            self.logger.error(
+                "on_demand_derivation_error",
+                variant_id=str(variant_id),
+                platform=platform.value,
+                error=str(e),
+            )
+            return {"success": False}
 
 
 class PlatformSyncAgent(BaseAgent):

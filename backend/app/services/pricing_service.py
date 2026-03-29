@@ -48,6 +48,25 @@ class PricingConfig:
         "sports": Decimal("0.35"),  # 35% (moderate margin)
     }
 
+    # Competition density adjustments (2026-03-28)
+    COMPETITION_DENSITY_ADJUSTMENTS = {
+        "low": Decimal("0.00"),  # No adjustment for low competition
+        "medium": Decimal("0.03"),  # +3% threshold for medium competition
+        "high": Decimal("0.05"),  # +5% threshold for high competition
+        "unknown": Decimal("0.02"),  # +2% threshold for unknown competition (conservative)
+    }
+
+    # Discovery mode adjustments (2026-03-28)
+    DISCOVERY_MODE_ADJUSTMENTS = {
+        "user": Decimal("0.00"),  # No adjustment for user-validated keywords
+        "generated": Decimal("0.01"),  # +1% threshold for generated keywords
+        "fallback": Decimal("0.03"),  # +3% threshold for fallback seeds
+        "none": Decimal("0.05"),  # +5% threshold when no validation occurred
+    }
+
+    # Degraded discovery penalty (2026-03-28)
+    DEGRADED_DISCOVERY_PENALTY = Decimal("0.02")  # +2% threshold when discovery degraded
+
     @classmethod
     def get_profitable_threshold(
         cls,
@@ -99,6 +118,33 @@ class PricingConfig:
         """
         profitable_threshold = cls.get_profitable_threshold(platform, category)
         return profitable_threshold * Decimal("0.60")
+
+    @classmethod
+    def get_demand_context_adjustment(
+        cls,
+        competition_density: Optional[str] = None,
+        discovery_mode: Optional[str] = None,
+        degraded: bool = False,
+    ) -> Decimal:
+        """Get additive threshold adjustment from demand context."""
+        adjustment = _ZERO
+
+        if competition_density:
+            adjustment += cls.COMPETITION_DENSITY_ADJUSTMENTS.get(
+                competition_density.lower(),
+                _ZERO,
+            )
+
+        if discovery_mode:
+            adjustment += cls.DISCOVERY_MODE_ADJUSTMENTS.get(
+                discovery_mode.lower(),
+                _ZERO,
+            )
+
+        if degraded:
+            adjustment += cls.DEGRADED_DISCOVERY_PENALTY
+
+        return adjustment
 
     # Supplier path selection weights
     SUPPLIER_PRICE_WEIGHT = Decimal("0.45")
@@ -269,6 +315,9 @@ class PricingResult:
         return_rate_assumption: Decimal,
         platform: Optional[str] = None,
         category: Optional[str] = None,
+        competition_density: Optional[str] = None,
+        discovery_mode: Optional[str] = None,
+        degraded: bool = False,
     ):
         self.supplier_price = supplier_price
         self.platform_price = platform_price
@@ -278,10 +327,19 @@ class PricingResult:
         self.return_rate_assumption = return_rate_assumption
         self.platform = platform
         self.category = category
+        self.competition_density = competition_density
+        self.discovery_mode = discovery_mode
+        self.degraded = degraded
 
         # Get dynamic thresholds based on platform and category
-        self.profitable_threshold = PricingConfig.get_profitable_threshold(platform, category)
-        self.marginal_threshold = PricingConfig.get_marginal_threshold(platform, category)
+        base_profitable_threshold = PricingConfig.get_profitable_threshold(platform, category)
+        demand_adjustment = PricingConfig.get_demand_context_adjustment(
+            competition_density=competition_density,
+            discovery_mode=discovery_mode,
+            degraded=degraded,
+        )
+        self.profitable_threshold = base_profitable_threshold + demand_adjustment
+        self.marginal_threshold = self.profitable_threshold * Decimal("0.60")
 
         # Calculate costs
         self.platform_commission = platform_price * platform_commission_rate
@@ -333,6 +391,9 @@ class PricingResult:
             "profitability_decision": self.profitability_decision.value,
             "platform": self.platform,
             "category": self.category,
+            "competition_density": self.competition_density,
+            "discovery_mode": self.discovery_mode,
+            "degraded": self.degraded,
             "profitable_threshold": float(self.profitable_threshold),
             "marginal_threshold": float(self.marginal_threshold),
             "explanation": {
@@ -349,6 +410,9 @@ class PricingResult:
                 "thresholds": {
                     "profitable": float(self.profitable_threshold),
                     "marginal": float(self.marginal_threshold),
+                    "competition_density": self.competition_density,
+                    "discovery_mode": self.discovery_mode,
+                    "degraded": self.degraded,
                 },
             },
         }
@@ -398,6 +462,9 @@ class PricingService:
         return_rate_assumption: Optional[Decimal] = None,
         platform: Optional[str] = None,
         category: Optional[str] = None,
+        competition_density: Optional[str] = None,
+        discovery_mode: Optional[str] = None,
+        degraded: bool = False,
     ) -> PricingResult:
         """Calculate pricing and profitability.
 
@@ -410,6 +477,9 @@ class PricingService:
             return_rate_assumption: Return rate assumption (optional, defaults to 5%)
             platform: Platform name for dynamic threshold (e.g., "amazon", "temu")
             category: Category name for dynamic threshold (e.g., "electronics", "jewelry")
+            competition_density: Demand competition density from discovery metadata
+            discovery_mode: Demand discovery mode (user/generated/fallback/none)
+            degraded: Whether demand discovery ran in degraded mode
 
         Returns:
             PricingResult with profitability decision based on dynamic thresholds
@@ -431,6 +501,9 @@ class PricingService:
             return_rate_assumption=return_rate_assumption,
             platform=platform,
             category=category,
+            competition_density=competition_density,
+            discovery_mode=discovery_mode,
+            degraded=degraded,
         )
 
         logger.info(
@@ -441,6 +514,9 @@ class PricingService:
             decision=result.profitability_decision.value,
             platform=platform,
             category=category,
+            competition_density=competition_density,
+            discovery_mode=discovery_mode,
+            degraded=degraded,
             profitable_threshold=float(result.profitable_threshold),
             marginal_threshold=float(result.marginal_threshold),
         )

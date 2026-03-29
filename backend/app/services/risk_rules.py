@@ -1,8 +1,8 @@
 """Risk assessment rules engine.
 
-Phase 2 Enhancement: Added competition density risk assessment.
+Phase 3 Enhancement: Added demand discovery quality risk assessment.
 - Compliance risk (brand, category, price) - 60% weight
-- Competition risk (market saturation) - 40% weight
+- Competition risk (market saturation + discovery quality) - 40% weight
 - Combined risk score determines final decision
 """
 import re
@@ -170,12 +170,103 @@ class CompetitionDensityRule(RiskRule):
         return True, reason
 
 
+class DemandDiscoveryRiskRule(RiskRule):
+    """Assess demand discovery quality risk (Phase 3 Enhancement).
+
+    Demand discovery quality indicates sourcing confidence:
+    - USER keywords: Highest confidence, user-validated
+    - GENERATED keywords: AI-generated, moderate confidence
+    - FALLBACK keywords: System fallback seeds, lower confidence
+    - NONE: No validated keywords, lowest confidence
+
+    Risk scoring (additive):
+    - Discovery mode scores:
+      - "user": 0 points (highest confidence)
+      - "generated": 10 points (AI-generated, validated)
+      - "fallback": 25 points (fallback seeds, less validated)
+      - "none": 40 points (no validated keywords)
+    - Degraded flag: +10 points (validation issues encountered)
+    - Fallback used flag: +5 points (fallback path was used)
+
+    This rule contributes to competition_score as discovery quality
+    directly affects market positioning confidence.
+    """
+
+    def __init__(self):
+        super().__init__(
+            name="demand_discovery",
+            weight=0,  # Weight is dynamic based on discovery quality
+            description="Assesses demand discovery quality and confidence",
+        )
+
+    def evaluate(self, product_data: dict) -> tuple[bool, Optional[str]]:
+        """Evaluate demand discovery quality risk.
+
+        Args:
+            product_data: Should include:
+                - "discovery_mode": "user", "generated", "fallback", or "none"
+                - "degraded": boolean indicating validation issues
+                - "fallback_used": boolean indicating fallback was used
+
+        Returns:
+            Tuple of (hit when there is actual discovery risk, reason with score breakdown)
+        """
+        discovery_mode_raw = product_data.get("discovery_mode")
+        degraded = bool(product_data.get("degraded", False))
+        fallback_used = bool(product_data.get("fallback_used", False))
+
+        if discovery_mode_raw is None and not degraded and not fallback_used:
+            self.weight = 0
+            return False, None
+
+        discovery_mode = (
+            str(discovery_mode_raw).lower() if discovery_mode_raw is not None else "unknown"
+        )
+
+        # Base score by discovery mode
+        mode_scores = {
+            "user": 0,
+            "generated": 10,
+            "fallback": 25,
+            "none": 40,
+        }
+
+        score = mode_scores.get(discovery_mode, 0)
+        reasons = []
+
+        if discovery_mode in mode_scores and score > 0:
+            reasons.append(f"discovery_mode={discovery_mode}")
+
+        # Add degraded penalty
+        if degraded:
+            score += 10
+            reasons.append("degraded=True (+10)")
+
+        # Add fallback_used penalty
+        if fallback_used:
+            score += 5
+            reasons.append("fallback_used=True (+5)")
+
+        # Update weight dynamically
+        self.weight = score
+
+        if score <= 0:
+            return False, None
+
+        reason_parts = [f"Discovery quality risk: {score} points"]
+        if reasons:
+            reason_parts.append(f"({', '.join(reasons)})")
+
+        reason = " ".join(reason_parts)
+        return True, reason
+
+
 class RiskAssessmentResult:
-    """Risk assessment result with combined scoring (Phase 2 Enhancement).
+    """Risk assessment result with combined scoring (Phase 3 Enhancement).
 
     Combines compliance risk and competition risk:
     - Compliance risk: Brand infringement, forbidden categories, suspicious pricing
-    - Competition risk: Market saturation (red ocean vs blue ocean)
+    - Competition risk: Market saturation and demand discovery quality
 
     Final score = compliance_score * 0.6 + competition_score * 0.4
     """
@@ -184,14 +275,16 @@ class RiskAssessmentResult:
         self.compliance_score = 0
         self.competition_score = 0
         self.total_score = 0
+        self.score = 0
         self.rule_hits: list[dict] = []
         self.decision = RiskDecision.PASS
 
     def add_hit(self, rule: RiskRule, reason: str):
         """Add a rule hit."""
         # Separate compliance and competition scores
-        if rule.name == "competition_density":
-            self.competition_score = rule.weight
+        # Competition-related rules: competition_density, demand_discovery
+        if rule.name in ("competition_density", "demand_discovery"):
+            self.competition_score += rule.weight
         else:
             self.compliance_score += rule.weight
 
@@ -207,12 +300,13 @@ class RiskAssessmentResult:
     def finalize(self):
         """Finalize decision based on combined score.
 
-        Phase 2 Enhancement: Uses weighted combination of compliance and competition.
+        Phase 3 Enhancement: Uses weighted combination of compliance and competition.
         - Compliance risk: 60% weight
-        - Competition risk: 40% weight
+        - Competition risk (density + discovery quality): 40% weight
         """
         # Calculate combined score
         self.total_score = int(self.compliance_score * 0.6 + self.competition_score * 0.4)
+        self.score = self.total_score
 
         # Decision thresholds
         if self.total_score >= 70:
@@ -236,15 +330,21 @@ class RiskAssessmentResult:
 class RiskRulesEngine:
     """Rule-based risk assessment engine.
 
-    Phase 2 Enhancement: Added competition density assessment.
+    Phase 3 Enhancement: Added demand discovery quality assessment.
     """
 
-    def __init__(self, enable_competition_risk: bool = True):
+    def __init__(
+        self,
+        enable_competition_risk: bool = True,
+        enable_demand_discovery_risk: bool = True,
+    ):
         """Initialize risk rules engine.
 
         Args:
             enable_competition_risk: Whether to enable competition density assessment
                                     (default: True)
+            enable_demand_discovery_risk: Whether to enable demand discovery quality
+                                          assessment (default: True)
         """
         self.rules: list[RiskRule] = [
             BrandKeywordRule(),
@@ -255,7 +355,11 @@ class RiskRulesEngine:
         if enable_competition_risk:
             self.rules.append(CompetitionDensityRule())
 
+        if enable_demand_discovery_risk:
+            self.rules.append(DemandDiscoveryRiskRule())
+
         self.enable_competition_risk = enable_competition_risk
+        self.enable_demand_discovery_risk = enable_demand_discovery_risk
 
     def assess(self, product_data: dict) -> RiskAssessmentResult:
         """Assess product risk.
@@ -267,6 +371,9 @@ class RiskRulesEngine:
                 - platform_price: Platform price
                 - competition_density: Competition density ("low", "medium", "high", "unknown")
                                       Optional, defaults to "unknown" if not provided
+                - discovery_mode: Demand discovery mode ("user", "generated", "fallback", "none")
+                - degraded: Whether demand discovery was degraded
+                - fallback_used: Whether fallback seeds were used
 
         Returns:
             RiskAssessmentResult with combined compliance and competition scores
@@ -286,6 +393,9 @@ class RiskRulesEngine:
             total_score=result.total_score,
             compliance_score=result.compliance_score,
             competition_score=result.competition_score,
+            discovery_mode=product_data.get("discovery_mode"),
+            degraded=product_data.get("degraded", False),
+            fallback_used=product_data.get("fallback_used", False),
             decision=result.decision.value,
             hits=len(result.rule_hits),
         )

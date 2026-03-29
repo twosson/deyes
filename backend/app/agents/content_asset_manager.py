@@ -13,9 +13,9 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from app.agents.base.agent import AgentContext, AgentResult, BaseAgent
-from app.core.enums import AssetType, ProductLifecycle
+from app.core.enums import AssetType, ContentUsageScope, ProductLifecycle
 from app.core.logging import get_logger
-from app.db.models import CandidateProduct, ContentAsset
+from app.db.models import CandidateProduct, ContentAsset, ProductVariant
 from app.services.image_generation.comfyui_client import ComfyUIClient, get_comfyui_client
 from app.services.storage.minio_client import MinIOClient, get_minio_client
 
@@ -64,6 +64,12 @@ class ContentAssetManagerAgent(BaseAgent):
         Generates images, uploads to storage, and creates ContentAsset records.
         """
         try:
+            action = context.input_data.get("action")
+            if action == "generate_base_assets":
+                return await self.generate_base_assets(context)
+            elif action == "generate_platform_assets":
+                return await self.generate_platform_assets(context)
+
             # Get input parameters
             candidate_product_id = UUID(context.input_data.get("candidate_product_id"))
             asset_types = context.input_data.get("asset_types", ["main_image"])
@@ -330,6 +336,317 @@ class ContentAssetManagerAgent(BaseAgent):
             success=False,
             error_message=str(error),
         )
+
+    async def generate_base_assets(self, context: AgentContext) -> AgentResult:
+        """Generate base assets for a product variant.
+
+        Creates base (platform-agnostic, no-text) assets for a variant
+        that has been converted from a candidate.
+
+        Input parameters:
+        - variant_id: UUID of the product variant
+        - candidate_product_id: UUID of the source candidate product (optional fallback)
+        - asset_types: List of asset types to generate (default: ["main_image"])
+        - styles: List of style presets (default: ["minimalist"])
+        - generate_count: Number per style (default: 1)
+        - platforms: Target platforms for tagging
+        - regions: Target regions for tagging
+        """
+        try:
+            variant_id_str = context.input_data.get("variant_id")
+            candidate_product_id_str = context.input_data.get("candidate_product_id")
+            asset_types = context.input_data.get("asset_types", ["main_image"])
+            styles = context.input_data.get("styles", ["minimalist"])
+            generate_count = context.input_data.get("generate_count", 1)
+            platforms = context.input_data.get("platforms", [])
+            regions = context.input_data.get("regions", [])
+
+            # Resolve variant
+            if variant_id_str:
+                variant_id = UUID(variant_id_str)
+                variant = await context.db.get(ProductVariant, variant_id)
+                if not variant:
+                    raise ValueError(f"Product variant not found: {variant_id}")
+                candidate_product_id = variant.master.candidate_product_id
+            elif candidate_product_id_str:
+                candidate_product_id = UUID(candidate_product_id_str)
+                variant = None
+            else:
+                raise ValueError("Either variant_id or candidate_product_id is required")
+
+            candidate = await context.db.get(CandidateProduct, candidate_product_id)
+            if not candidate:
+                raise ValueError(f"Candidate product not found: {candidate_product_id}")
+
+            self.logger.info(
+                "base_asset_generation_started",
+                variant_id=variant_id_str,
+                candidate_product_id=str(candidate_product_id),
+                asset_types=asset_types,
+            )
+
+            # Initialize clients
+            if self.comfyui_client is None:
+                self.comfyui_client = get_comfyui_client()
+            if self.minio_client is None:
+                self.minio_client = get_minio_client()
+
+            created_assets: list[ContentAsset] = []
+
+            for asset_type in asset_types:
+                for style in styles:
+                    for i in range(generate_count):
+                        try:
+                            asset = await self._generate_single_asset(
+                                context=context,
+                                candidate=candidate,
+                                asset_type=asset_type,
+                                style=style,
+                                reference_images=None,
+                                platforms=platforms,
+                                regions=regions,
+                                variant_group=None,
+                                index=i + 1,
+                            )
+                            if asset:
+                                # Mark as base asset
+                                asset.usage_scope = ContentUsageScope.BASE
+                                # Mark as no-text for platform agnosticism
+                                spec = asset.generation_params or {}
+                                spec["has_text"] = False
+                                asset.generation_params = spec
+                                # Link to variant if available
+                                if variant:
+                                    asset.product_variant_id = variant.id
+                                created_assets.append(asset)
+                        except Exception as e:
+                            self.logger.error(
+                                "base_asset_generation_failed",
+                                asset_type=asset_type,
+                                style=style,
+                                index=i,
+                                error=str(e),
+                            )
+                            continue
+
+            self.logger.info(
+                "base_asset_generation_completed",
+                variant_id=variant_id_str,
+                assets_created=len(created_assets),
+            )
+
+            return AgentResult(
+                success=True,
+                output_data={
+                    "variant_id": variant_id_str,
+                    "candidate_product_id": str(candidate_product_id),
+                    "assets_created": len(created_assets),
+                    "asset_ids": [str(a.id) for a in created_assets],
+                    "usage_scope": ContentUsageScope.BASE.value,
+                },
+            )
+
+        except Exception as e:
+            self.logger.error(
+                "base_asset_generation_error",
+                error=str(e),
+                error_type=type(e).__name__,
+            )
+            return AgentResult(success=False, error_message=str(e))
+
+
+    async def generate_platform_assets(self, context: AgentContext) -> AgentResult:
+        """Generate platform-derived assets from base assets.
+
+        Input parameters:
+        - variant_id: UUID of the product variant
+        - platform: Target platform (e.g., "amazon", "temu")
+        - asset_types: List of asset types (default: ["main_image"])
+        - language: Optional language code
+        - force_regenerate: Force regeneration even if derived asset exists
+        """
+        from uuid import UUID
+
+        from sqlalchemy import select
+
+        from app.core.enums import AssetType, ContentUsageScope
+        from app.db.models import ContentAsset
+        from app.services.asset_derivation_service import AssetDerivationService
+
+        try:
+            variant_id = UUID(context.input_data["variant_id"])
+            platform_str = context.input_data["platform"]
+            from app.core.enums import TargetPlatform
+            platform = TargetPlatform(platform_str)
+            asset_types = context.input_data.get("asset_types", ["main_image"])
+            language = context.input_data.get("language")
+            force_regenerate = context.input_data.get("force_regenerate", False)
+
+            self.logger.info(
+                "platform_asset_generation_started",
+                variant_id=str(variant_id),
+                platform=platform.value,
+                asset_types=asset_types,
+                language=language,
+            )
+
+            derivation_service = AssetDerivationService()
+            created_assets: list[ContentAsset] = []
+            deferred_count = 0
+            error_count = 0
+
+            for asset_type_str in asset_types:
+                asset_type = AssetType(asset_type_str)
+
+                # 1. Find BASE assets for this variant
+                base_asset = await self._find_best_base_asset(
+                    variant_id=variant_id,
+                    asset_type=asset_type,
+                    db=context.db,
+                )
+                if not base_asset:
+                    self.logger.warning(
+                        "no_base_asset_found",
+                        variant_id=str(variant_id),
+                        asset_type=asset_type.value,
+                    )
+                    continue
+
+                # 2. Check for existing derived asset
+                existing = await self._find_existing_derived_asset(
+                    base_asset_id=base_asset.id,
+                    platform=platform,
+                    language=language,
+                    db=context.db,
+                )
+                if existing and not force_regenerate:
+                    self.logger.info(
+                        "existing_derived_asset_reused",
+                        base_asset_id=str(base_asset.id),
+                        existing_asset_id=str(existing.id),
+                    )
+                    created_assets.append(existing)
+                    continue
+
+                # 3. Execute derivation
+                result = await derivation_service.derive_asset(
+                    base_asset=base_asset,
+                    platform=platform,
+                    language=language,
+                    db=context.db,
+                )
+
+                if result["status"] == "success":
+                    created_assets.append(result["asset"])
+                    await context.db.commit()
+                elif result["status"] == "deferred":
+                    self.logger.warning(
+                        "derivation_deferred",
+                        base_asset_id=str(base_asset.id),
+                        reason=result.get("reason"),
+                    )
+                    deferred_count += 1
+                else:
+                    self.logger.error(
+                        "derivation_failed",
+                        base_asset_id=str(base_asset.id),
+                        reason=result.get("reason"),
+                    )
+                    error_count += 1
+
+            self.logger.info(
+                "platform_asset_generation_completed",
+                variant_id=str(variant_id),
+                platform=platform.value,
+                assets_created=len(created_assets),
+                deferred=deferred_count,
+                errors=error_count,
+            )
+
+            return AgentResult(
+                success=True,
+                output_data={
+                    "variant_id": str(variant_id),
+                    "platform": platform.value,
+                    "assets_created": len(created_assets),
+                    "deferred": deferred_count,
+                    "errors": error_count,
+                    "asset_ids": [str(a.id) for a in created_assets],
+                    "usage_scope": ContentUsageScope.PLATFORM_DERIVED.value,
+                },
+            )
+
+        except Exception as e:
+            self.logger.error(
+                "platform_asset_generation_error",
+                error=str(e),
+                error_type=type(e).__name__,
+            )
+            return AgentResult(success=False, error_message=str(e))
+
+    async def _find_best_base_asset(
+        self,
+        *,
+        variant_id: UUID,
+        asset_type: AssetType,
+        db,
+    ) -> ContentAsset | None:
+        """Find the best BASE asset for a variant and asset type."""
+        stmt = select(ContentAsset).where(
+            ContentAsset.product_variant_id == variant_id,
+            ContentAsset.asset_type == asset_type,
+            ContentAsset.usage_scope == ContentUsageScope.BASE,
+            ContentAsset.archived == False,
+        )
+        result = await db.execute(stmt)
+        assets = list(result.scalars().all())
+
+        if not assets:
+            # Fall back to any BASE asset not linked to variant
+            stmt = select(ContentAsset).where(
+                ContentAsset.candidate_product_id.in_(
+                    select(ContentAsset.candidate_product_id).where(
+                        ContentAsset.product_variant_id == variant_id
+                    )
+                ),
+                ContentAsset.asset_type == asset_type,
+                ContentAsset.usage_scope == ContentUsageScope.BASE,
+                ContentAsset.archived == False,
+            )
+            result = await db.execute(stmt)
+            assets = list(result.scalars().all())
+
+        # Return highest quality or first
+        if assets:
+            return max(assets, key=lambda a: a.ai_quality_score or 0)
+        return None
+
+    async def _find_existing_derived_asset(
+        self,
+        *,
+        base_asset_id: UUID,
+        platform,
+        language: str | None,
+        db,
+    ) -> ContentAsset | None:
+        """Find an existing platform-derived asset for the given base asset."""
+        stmt = select(ContentAsset).where(
+            ContentAsset.parent_asset_id == base_asset_id,
+            ContentAsset.usage_scope == ContentUsageScope.PLATFORM_DERIVED,
+            ContentAsset.archived == False,
+        )
+        result = await db.execute(stmt)
+        assets = list(result.scalars().all())
+
+        for asset in assets:
+            if asset.platform_tags and platform.value in asset.platform_tags:
+                if language:
+                    if asset.language_tags and language in asset.language_tags:
+                        return asset
+                else:
+                    return asset
+
+        return None
 
 
 class ContentAssetQuery:

@@ -3,34 +3,43 @@
 > 面向研发、架构、数据、平台和测试团队
 >
 > 定位: AI Native 跨境卖家操作系统 + ERP Lite 内核
-> 版本: v2.0（战略转向版）
-> 更新时间: 2026-03-27
+> 版本: v2.1
+> 更新时间: 2026-03-29
 
 ---
 
-## ⚠️ 战略转向：从推荐分析到自动化经营（2026-03-27）
+## 当前研发基线（2026-03-29）
 
-### 转向背景
+当前仓库的已实现基线已经不是早期的“推荐分析平台”原型，而是围绕需求验证优先选品与自动化经营方向演进的后端骨架。
 
-在完成用户反馈机制、Helium 10 集成、数据看板扩展后，我们发现系统正在偏离初始目标：
+**已完成的核心基线**：
+- 需求验证优先的候选发现链路（DemandValidator）
+- 1688 供应商匹配与竞争集评分（SupplierMatcher）
+- 动态利润阈值与定价决策（PricingService）
+- 合规风险 + 竞争密度 + 需求发现质量风险（RiskRules）
+- 推荐服务作为内部决策引擎（RecommendationService）
+- 定价、风控、推荐排序三层的需求上下文集成
+- 自动执行方向的文档与基础服务骨架（AutoActionEngine / Approval 方向）
 
-**问题诊断**：
-- 最近3个功能交付：用户反馈按钮、时间趋势图表、平台对比图表
-- 前端重心：RecommendationsPage（推荐列表 + 详情抽屉 + 分析看板）
-- 用户交互：手动点击"接受/拒绝"按钮
-- 数据流向：候选 → 推荐分数 → 人工决策 → 手动反馈
+**当前研发重点**：
+1. 固化 Stage 0 测试基线与回归可观测性
+2. 建立 Stage 1 的表现数据回流（ListingPerformanceDaily / AssetPerformanceDaily）
+3. 建立自动优化闭环（调价 / 换素材 / 暂停）
+4. 推进多平台发布集成与审批兜底
 
-**核心问题**：系统正在变成"推荐分析平台"，而不是"自动化经营系统"
+## 自动化经营方向说明
 
-### 新北极星
+Deyes 的目标不是把推荐结果展示给人做手动分析，而是在可控边界内自动执行经营动作，并把表现数据回流系统形成持续优化闭环。
 
-**Deyes = AI-Driven Automated Operations System**
+因此：
+- 推荐服务保留，但定位为内部决策引擎
+- 审批工作台替代手动推荐浏览页面
+- 性能监控面板替代通用 BI 式推荐分析页面
+- 高风险动作需要审批，低风险动作自动执行
 
-不是帮人做判断，而是替人做执行。
+### 当前优先级
 
-### 新优先级排序
-
-**P0（立即执行）- 自动执行层**：
+**P0 - 自动执行与反馈闭环**：
 1. AutoActionEngine 服务
    - 自动上架（auto_publish）
    - 自动调价（auto_reprice）
@@ -41,50 +50,27 @@
    - draft → pending_approval → approved → published → active → paused
    - 审批边界配置（什么可以自动执行 vs 需要审批）
 
-3. 多平台API集成
+3. 多平台 API 集成
    - Temu API（上架、调价、暂停）
    - Amazon API
    - AliExpress API
-   - RPA备选方案（API不可用时）
+   - RPA 备选方案（API 不可用时）
 
-**P0（立即执行）- 性能数据反馈**：
-1. ListingPerformanceDaily 数据采集
-   - 曝光量、点击量、转化率、GMV、ROI
-   - 每日定时任务采集
+4. PerformanceDataLoop
+   - ListingPerformanceDaily 数据采集
+   - AssetPerformanceDaily 数据采集
+   - 转化率 / ROI 计算逻辑
 
-2. AssetPerformanceDaily 数据采集
-   - 主图点击率、详情页停留时长
-   - A/B测试对比数据
+5. AI 自动优化
+   - 基于性能数据的自动调价
+   - 基于转化率的自动素材切换
+   - 基于 ROI 的自动暂停
 
-3. 性能计算逻辑
-   - 转化率 = 订单数 / 点击数
-   - ROI = (GMV - 成本) / 成本
-   - 素材质量分 = 点击率 * 停留时长
-
-**P0（立即执行）- AI自动优化**：
-1. 基于性能数据的自动调价
-   - ROI < 目标 → 降价 5-10%
-   - ROI > 目标 → 涨价 3-5%
-   - 竞品价格变化 → 自动跟价
-
-2. 基于转化率的自动素材切换
-   - 转化率 < 平均 → 切换到备选素材
-   - A/B测试胜出 → 自动应用
-
-3. 基于ROI的自动暂停
-   - ROI < 阈值 7天 → 自动暂停
-   - 库存不足 → 自动暂停
-   - 合规风险 → 自动下架
-
-**P1（短期）- 人工审批工作台**：
-- 高风险操作需要人工审批（首次上架、大���调价、下架）
+**P1 - 人工审批与监控**：
+- 高风险操作需要人工审批（首次上架、大幅调价、下架）
 - 低风险操作自动执行（小幅调价、素材切换、暂停）
 - 审批边界可配置
-
-**P2（中期）- 性能监控面板**：
-- 降级后的数据看板（不再是主产品）
-- 用于监控自动化执行效果
-- 异常告警
+- 性能监控面板与异常告警
 
 ### API-first, RPA-second 原则
 
@@ -112,51 +98,21 @@
 - 下架商品
 - 高风险品类操作
 
-### 保留/降级/暂停清单
+### 当前能力定位
 
-**保留并强化（P0）**：
-- ✅ 需求验证层（DemandValidator）
-- ✅ 供应商匹配层（SupplierMatcher）
-- ✅ 定价计算层（PricingService）
-- ✅ 风控评估层（RiskRules）
-- ✅ 推荐服务（降级为内部服务，不对外暴露UI）
+- DemandValidator / SupplierMatcher / PricingService / RiskRules 仍是当前选品主链路的核心能力
+- RecommendationService 保留为内部决策引擎，继续服务审批与自动执行判断
+- ApprovalWorkbench 与 Performance Monitoring 是自动化经营方向的操作界面，而不是通用推荐分析页面
 
-**降级为辅助功能**：
-- ⬇️ 推荐页面（RecommendationsPage）→ 改为"待审批工作台"
-- ⬇️ 数据看板（时间趋势、平台对比）→ 改为"性能监控面板"
-- ⬇️ 用户反馈按钮 → 改为"审批/拒绝"按钮
+### 阶段推进清单
 
-**暂停开发**：
-- ⏸️ 更多推荐分析维度
-- ⏸️ 更多手动反馈选项
-- ⏸️ 更多BI图表
-
-### 90天执行路线图
-
-**Week 1-2: 自动执行层骨架**
-- [ ] AutoActionEngine 服务实现
-- [ ] PlatformListing 状态机
-- [ ] 审批边界配置
-
-**Week 3-4: 性能数据采集**
-- [ ] ListingPerformanceDaily 数据采集任务
-- [ ] AssetPerformanceDaily 数据采集任务
-- [ ] 转化率/ROI计算逻辑
-
-**Week 5-6: AI自动优化**
-- [ ] 基于性能数据的自动调价算法
-- [ ] 基于转化率的自动素材切换
-- [ ] 基于ROI的自动暂停逻辑
-
-**Week 7-8: 多平台API集成**
-- [ ] Temu API集成
-- [ ] Amazon API集成
-- [ ] AliExpress API集成
-
-**Week 9-12: RPA备选方案**
-- [ ] Playwright自动化脚本
-- [ ] API失败时的自动回退
-- [ ] 人工审批工作台UI
+- [ ] AutoActionEngine 服务实现与状态机收口
+- [ ] ListingPerformanceDaily / AssetPerformanceDaily 数据回流
+- [ ] 转化率 / ROI / 素材表现计算逻辑
+- [ ] 基于表现数据的自动调价 / 换素材 / 暂停
+- [ ] Temu / Amazon / AliExpress 平台集成
+- [ ] API 失败时的 RPA 回退
+- [ ] ApprovalWorkbench 与异常告警面板
 
 ---
 

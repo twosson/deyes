@@ -107,8 +107,10 @@ class DemandDiscoveryService:
             category=category,
             keywords=normalized_keywords,
             region=normalized_region,
+            platform=platform,
             allow_fallback=allow_fallback,
             max_keywords=max_keywords,
+            user_keywords_count=len(normalized_keywords),
         )
 
         accumulated_rejections: list[DemandDiscoveryKeyword] = []
@@ -124,6 +126,27 @@ class DemandDiscoveryService:
                 max_keywords=max_keywords,
             )
             if user_result.validated_keywords:
+                self.logger.info(
+                    "demand_discovery_metrics",
+                    category=category,
+                    region=normalized_region,
+                    platform=platform,
+                    discovery_mode=user_result.discovery_mode,
+                    success=True,
+                    skip=False,
+                    fallback_used=user_result.fallback_used,
+                    degraded=user_result.degraded,
+                    generated_recovery=False,
+                    validated_fallback=False,
+                    validated_keywords_count=len(user_result.validated_keywords),
+                    rejected_keywords_count=len(user_result.rejected_keywords),
+                    avg_validated_keywords_count=len(user_result.validated_keywords),
+                    discovery_success_rate=1.0,
+                    generated_recovery_rate=0.0,
+                    validated_fallback_rate=0.0,
+                    skip_rate=0.0,
+                    selection_triggered_per_category=1,
+                )
                 return user_result
             accumulated_rejections.extend(user_result.rejected_keywords)
 
@@ -136,13 +159,35 @@ class DemandDiscoveryService:
                 max_keywords=max_keywords,
             )
             if generated_result.validated_keywords:
-                return DemandDiscoveryResult(
+                result = DemandDiscoveryResult(
                     validated_keywords=generated_result.validated_keywords,
                     rejected_keywords=accumulated_rejections + generated_result.rejected_keywords,
                     discovery_mode=generated_result.discovery_mode,
                     fallback_used=False,
                     degraded=bool(normalized_keywords) or generated_result.degraded,
                 )
+                self.logger.info(
+                    "demand_discovery_metrics",
+                    category=category,
+                    region=normalized_region,
+                    platform=platform,
+                    discovery_mode=result.discovery_mode,
+                    success=True,
+                    skip=False,
+                    fallback_used=result.fallback_used,
+                    degraded=result.degraded,
+                    generated_recovery=bool(normalized_keywords),
+                    validated_fallback=False,
+                    validated_keywords_count=len(result.validated_keywords),
+                    rejected_keywords_count=len(result.rejected_keywords),
+                    avg_validated_keywords_count=len(result.validated_keywords),
+                    discovery_success_rate=1.0,
+                    generated_recovery_rate=1.0 if normalized_keywords else 0.0,
+                    validated_fallback_rate=0.0,
+                    skip_rate=0.0,
+                    selection_triggered_per_category=1,
+                )
+                return result
             accumulated_rejections.extend(generated_result.rejected_keywords)
 
         # 3. Validated fallback seeds.
@@ -153,20 +198,64 @@ class DemandDiscoveryService:
                 platform=platform,
                 max_keywords=max_keywords,
             )
-            return DemandDiscoveryResult(
+            result = DemandDiscoveryResult(
                 validated_keywords=fallback_result.validated_keywords,
                 rejected_keywords=accumulated_rejections + fallback_result.rejected_keywords,
                 discovery_mode=fallback_result.discovery_mode,
                 fallback_used=fallback_result.fallback_used,
                 degraded=True,
             )
+            self.logger.info(
+                "demand_discovery_metrics",
+                category=category,
+                region=normalized_region,
+                platform=platform,
+                discovery_mode=result.discovery_mode,
+                success=bool(result.validated_keywords),
+                skip=not bool(result.validated_keywords),
+                fallback_used=result.fallback_used,
+                degraded=result.degraded,
+                generated_recovery=False,
+                validated_fallback=bool(result.validated_keywords),
+                validated_keywords_count=len(result.validated_keywords),
+                rejected_keywords_count=len(result.rejected_keywords),
+                avg_validated_keywords_count=len(result.validated_keywords),
+                discovery_success_rate=1.0 if result.validated_keywords else 0.0,
+                generated_recovery_rate=0.0,
+                validated_fallback_rate=1.0 if result.validated_keywords else 0.0,
+                skip_rate=1.0 if not result.validated_keywords else 0.0,
+                selection_triggered_per_category=1 if result.validated_keywords else 0,
+            )
+            return result
 
         # 4. Nothing validated.
         self.logger.warning(
             "demand_discovery_no_valid_keywords",
             category=category,
             region=normalized_region,
+            platform=platform,
             rejected=len(accumulated_rejections),
+        )
+        self.logger.info(
+            "demand_discovery_metrics",
+            category=category,
+            region=normalized_region,
+            platform=platform,
+            discovery_mode="none",
+            success=False,
+            skip=True,
+            fallback_used=False,
+            degraded=True,
+            generated_recovery=False,
+            validated_fallback=False,
+            validated_keywords_count=0,
+            rejected_keywords_count=len(accumulated_rejections),
+            avg_validated_keywords_count=0,
+            discovery_success_rate=0.0,
+            generated_recovery_rate=0.0,
+            validated_fallback_rate=0.0,
+            skip_rate=1.0,
+            selection_triggered_per_category=0,
         )
         return DemandDiscoveryResult(
             validated_keywords=[],

@@ -1,8 +1,8 @@
 """Risk Controller Agent.
 
-Phase 2 Enhancement: Added competition density risk assessment.
+Phase 3 Enhancement: Added demand discovery quality risk assessment.
 - Compliance risk (brand, category, price) - 60% weight
-- Competition risk (market saturation) - 40% weight
+- Competition risk (market saturation + discovery quality) - 40% weight
 """
 from uuid import UUID, uuid4
 
@@ -17,7 +17,7 @@ from app.services.risk_rules import RiskRulesEngine
 class RiskControllerAgent(BaseAgent):
     """Agent for IP infringement and compliance screening.
 
-    Phase 2 Enhancement: Now includes competition density assessment.
+    Phase 3 Enhancement: Now includes demand discovery quality assessment.
     """
 
     def __init__(self, risk_engine: RiskRulesEngine = None):
@@ -61,10 +61,22 @@ class RiskControllerAgent(BaseAgent):
                     else None,
                 }
 
-                # Phase 2 Enhancement: Add competition density from normalized_attributes
+                # Phase 2/3 Enhancement: Add demand context from candidate metadata
                 normalized_attrs = candidate.normalized_attributes or {}
-                competition_density = normalized_attrs.get("competition_density", "unknown")
-                product_data["competition_density"] = competition_density
+                demand_discovery_metadata = candidate.demand_discovery_metadata or {}
+
+                product_data["competition_density"] = normalized_attrs.get(
+                    "competition_density", "unknown"
+                )
+                product_data["discovery_mode"] = demand_discovery_metadata.get(
+                    "discovery_mode", "unknown"
+                )
+                product_data["degraded"] = bool(
+                    demand_discovery_metadata.get("degraded", False)
+                )
+                product_data["fallback_used"] = bool(
+                    demand_discovery_metadata.get("fallback_used", False)
+                )
 
                 # Run risk assessment
                 risk_result = self.risk_engine.assess(product_data)

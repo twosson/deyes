@@ -93,11 +93,16 @@ class PricingAnalystAgent(BaseAgent):
                     continue
 
                 # Calculate pricing using selected supplier
+                normalized_attributes = candidate.normalized_attributes or {}
+                demand_discovery_metadata = candidate.demand_discovery_metadata or {}
                 pricing_result = self.pricing_service.calculate_pricing(
                     supplier_price=selection_result.selected_path.supplier_price,
                     platform_price=candidate.platform_price,
                     platform=candidate.source_platform.value if candidate.source_platform else None,
                     category=candidate.category,
+                    competition_density=normalized_attributes.get("competition_density"),
+                    discovery_mode=demand_discovery_metadata.get("discovery_mode"),
+                    degraded=bool(demand_discovery_metadata.get("degraded", False)),
                 )
 
                 # Build explanation with supplier selection details

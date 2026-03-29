@@ -126,3 +126,95 @@ class FeedbackAction(str, Enum):
     ACCEPTED = "accepted"  # 接受推荐
     REJECTED = "rejected"  # 拒绝推荐
     DEFERRED = "deferred"  # 延后决策
+
+
+class ProductMasterStatus(str, Enum):
+    """Product master status."""
+    DRAFT = "draft"
+    ACTIVE = "active"
+    ARCHIVED = "archived"
+
+
+class ProductVariantStatus(str, Enum):
+    """Product variant (SKU) status."""
+    DRAFT = "draft"
+    ACTIVE = "active"
+    ARCHIVED = "archived"
+
+
+class InventoryMode(str, Enum):
+    """Inventory mode for product variants."""
+    PRE_ORDER = "pre_order"  # 预售模式
+    STOCK_FIRST = "stock_first"  # 备货模式
+
+
+class SupplierStatus(str, Enum):
+    """Supplier status."""
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+    BLACKLISTED = "blacklisted"
+
+
+class PurchaseOrderStatus(str, Enum):
+    """Purchase order status."""
+    DRAFT = "draft"
+    SUBMITTED = "submitted"
+    CONFIRMED = "confirmed"
+    IN_TRANSIT = "in_transit"
+    RECEIVED = "received"
+    CANCELLED = "cancelled"
+
+
+class InboundShipmentStatus(str, Enum):
+    """Inbound shipment status."""
+    PENDING = "pending"
+    IN_TRANSIT = "in_transit"
+    ARRIVED = "arrived"
+    RECEIVED = "received"
+    CANCELLED = "cancelled"
+
+
+class InventoryMovementType(str, Enum):
+    """Inventory movement type."""
+    INBOUND = "inbound"  # 入库
+    OUTBOUND = "outbound"  # 出库
+    ADJUSTMENT = "adjustment"  # 调整
+    TRANSFER = "transfer"  # 调拨
+    RETURN = "return"  # 退货
+
+
+class InventoryReservationStatus(str, Enum):
+    """Inventory reservation status."""
+    ACTIVE = "active"
+    FULFILLED = "fulfilled"
+    CANCELLED = "cancelled"
+
+
+class ContentLanguage(str, Enum):
+    """Content language tags."""
+    EN = "en"  # English
+    ZH = "zh"  # Chinese
+    JA = "ja"  # Japanese
+    ES = "es"  # Spanish
+    DE = "de"  # German
+    FR = "fr"  # French
+    RU = "ru"  # Russian
+    PT = "pt"  # Portuguese
+    AR = "ar"  # Arabic
+
+
+class ContentUsageScope(str, Enum):
+    """Content usage scope."""
+    BASE = "base"  # 基础通用素材
+    PLATFORM_DERIVED = "platform_derived"  # 平台派生素材
+    LOCALIZED = "localized"  # 本地化素材
+    AB_TEST = "ab_test"  # A/B 测试素材
+
+
+class LocalizationType(str, Enum):
+    """Localization content type."""
+    TITLE = "title"  # 标题
+    DESCRIPTION = "description"  # 描述
+    BULLET_POINTS = "bullet_points"  # 卖点
+    IMAGE_TEXT = "image_text"  # 图片文字
+    SEO_KEYWORDS = "seo_keywords"  # SEO 关键词

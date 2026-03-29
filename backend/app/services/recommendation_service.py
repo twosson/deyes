@@ -43,12 +43,46 @@ class RecommendationService:
     HIGH_THRESHOLD = 75.0
     MEDIUM_THRESHOLD = 60.0
 
+    # Demand discovery confidence adjustments (2026-03-28)
+    DISCOVERY_MODE_ADJUSTMENTS = {
+        "user": 3.0,
+        "generated": 1.0,
+        "fallback": -4.0,
+        "none": -6.0,
+    }
+    DEGRADED_PENALTY = -2.0
+    FALLBACK_USED_PENALTY = -1.0
+
+    @classmethod
+    def get_demand_context_adjustment(
+        cls,
+        discovery_mode: Optional[str] = None,
+        degraded: bool = False,
+        fallback_used: bool = False,
+    ) -> float:
+        """Get additive recommendation adjustment from demand context."""
+        adjustment = 0.0
+
+        if discovery_mode:
+            adjustment += cls.DISCOVERY_MODE_ADJUSTMENTS.get(discovery_mode.lower(), 0.0)
+
+        if degraded:
+            adjustment += cls.DEGRADED_PENALTY
+
+        if fallback_used and (not discovery_mode or discovery_mode.lower() != "fallback"):
+            adjustment += cls.FALLBACK_USED_PENALTY
+
+        return adjustment
+
     def calculate_recommendation_score(
         self,
         priority_score: Optional[float],
         margin_percentage: Optional[Decimal],
         risk_score: Optional[int],
         supplier_confidence: Optional[Decimal],
+        discovery_mode: Optional[str] = None,
+        degraded: bool = False,
+        fallback_used: bool = False,
     ) -> tuple[float, dict]:
         """Calculate recommendation score (0-100).
 
@@ -57,6 +91,9 @@ class RecommendationService:
             margin_percentage: Profit margin percentage (0-100)
             risk_score: Risk assessment score (0-100)
             supplier_confidence: Best supplier confidence score (0-1)
+            discovery_mode: Demand discovery mode (user/generated/fallback/none)
+            degraded: Whether demand discovery was degraded
+            fallback_used: Whether fallback seeds were used
 
         Returns:
             Tuple of (recommendation_score, score_breakdown)
@@ -91,12 +128,22 @@ class RecommendationService:
             priority_component + margin_component + risk_component + supplier_component
         )
 
+        # Component 5: Demand discovery confidence adjustment (2026-03-28)
+        demand_adjustment = self.get_demand_context_adjustment(
+            discovery_mode=discovery_mode,
+            degraded=degraded,
+            fallback_used=fallback_used,
+        )
+        total_score += demand_adjustment
+        total_score = max(0.0, min(100.0, total_score))  # Clamp to 0-100
+
         # Build breakdown
         breakdown = {
             "priority_component": round(priority_component, 2),
             "margin_component": round(margin_component, 2),
             "risk_component": round(risk_component, 2),
             "supplier_component": round(supplier_component, 2),
+            "demand_adjustment": round(demand_adjustment, 2),
             "total_score": round(total_score, 2),
         }
 
@@ -111,6 +158,9 @@ class RecommendationService:
         sales_count: Optional[int],
         rating: Optional[Decimal],
         profitability_decision: Optional[ProfitabilityDecision],
+        discovery_mode: Optional[str] = None,
+        degraded: bool = False,
+        fallback_used: bool = False,
     ) -> list[str]:
         """Generate human-readable recommendation reasons.
 
@@ -122,6 +172,9 @@ class RecommendationService:
             sales_count: Product sales count
             rating: Product rating (0-5)
             profitability_decision: Profitability decision
+            discovery_mode: Demand discovery mode (user/generated/fallback/none)
+            degraded: Whether demand discovery was degraded
+            fallback_used: Whether fallback seeds were used
 
         Returns:
             List of recommendation reasons
@@ -155,7 +208,22 @@ class RecommendationService:
         elif competition_density == "high":
             reasons.append("高竞争红海市场，需谨慎评估")
 
-        # 4. Risk reason
+        # 4. Demand discovery reason
+        if discovery_mode == "user":
+            reasons.append("需求关键词已人工确认")
+        elif discovery_mode == "generated":
+            reasons.append("基于生成关键词完成需求发现")
+        elif discovery_mode == "fallback":
+            reasons.append("使用回退关键词发现候选，建议谨慎验证")
+        elif discovery_mode == "none":
+            reasons.append("缺少有效需求关键词支撑，建议人工复核")
+
+        if degraded:
+            reasons.append("需求发现过程存在降级，建议补充验证")
+        elif fallback_used and discovery_mode != "fallback":
+            reasons.append("需求发现使用了部分回退信号")
+
+        # 5. Risk reason
         if risk_decision == RiskDecision.PASS:
             reasons.append("合规风险低，可安全上架")
         elif risk_decision == RiskDecision.REVIEW:
@@ -163,7 +231,7 @@ class RecommendationService:
         elif risk_decision == RiskDecision.REJECT:
             reasons.append("高风险产品，不建议上架")
 
-        # 5. Sales reason
+        # 6. Sales reason
         if sales_count and sales_count >= 5000:
             reasons.append(f"高销量验证（{sales_count}单）")
         elif sales_count and sales_count >= 1000:
@@ -171,7 +239,7 @@ class RecommendationService:
         elif sales_count and sales_count >= 100:
             reasons.append(f"有一定销量基础（{sales_count}单）")
 
-        # 6. Rating reason
+        # 7. Rating reason
         if rating and rating >= 4.5:
             reasons.append(f"高评分产品（{float(rating):.1f}星）")
         elif rating and rating >= 4.0:

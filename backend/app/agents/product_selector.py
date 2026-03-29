@@ -107,6 +107,7 @@ class ProductSelectorAgent(BaseAgent):
                     strategy_run_id=str(context.strategy_run_id),
                     category=category,
                     region=region,
+                    platform=platform.value,
                     discovery_mode=discovery_result.discovery_mode,
                     validated=len(discovery_result.validated_keywords),
                     rejected=len(discovery_result.rejected_keywords),
@@ -121,6 +122,20 @@ class ProductSelectorAgent(BaseAgent):
                         strategy_run_id=str(context.strategy_run_id),
                         category=category,
                         region=region,
+                        platform=platform.value,
+                    )
+                    self.logger.info(
+                        "product_selection_metrics",
+                        strategy_run_id=str(context.strategy_run_id),
+                        category=category,
+                        region=region,
+                        platform=platform.value,
+                        discovery_mode=discovery_result.discovery_mode,
+                        skipped=True,
+                        skip_rate=1.0,
+                        selection_triggered_per_category=0,
+                        candidate_count_per_discovery_mode=0,
+                        validated_keywords_count=len(discovery_result.validated_keywords),
                     )
                     return AgentResult(
                         success=True,
@@ -282,6 +297,19 @@ class ProductSelectorAgent(BaseAgent):
                 "candidates_created",
                 count=len(candidate_ids),
                 strategy_run_id=str(context.strategy_run_id),
+            )
+            self.logger.info(
+                "product_selection_metrics",
+                strategy_run_id=str(context.strategy_run_id),
+                category=category,
+                region=region,
+                platform=platform.value,
+                discovery_mode=demand_discovery_payload["discovery_mode"] if demand_discovery_payload else "direct",
+                skipped=False,
+                skip_rate=0.0,
+                selection_triggered_per_category=1,
+                candidate_count_per_discovery_mode=len(candidate_ids),
+                validated_keywords_count=len(validated_keywords),
             )
 
             output_data = {

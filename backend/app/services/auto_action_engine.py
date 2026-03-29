@@ -30,7 +30,7 @@ from app.clients.amazon_api import AmazonAPIClient
 from app.clients.platform_api_base import PlatformActionResult, PlatformAPIBase
 from app.clients.temu_api import TemuAPIClient
 from app.core.config import get_settings
-from app.core.enums import PlatformListingStatus, TargetPlatform
+from app.core.enums import InventoryMode, PlatformListingStatus, TargetPlatform
 from app.core.logging import get_logger
 from app.db.models import (
     AssetPerformanceDaily,
@@ -41,6 +41,8 @@ from app.db.models import (
     PlatformListing,
     PriceHistory,
     PricingAssessment,
+    ProductMaster,
+    ProductVariant,
     RiskAssessment,
     RunEvent,
 )
@@ -87,6 +89,24 @@ class AutoActionEngine:
             await self._amazon_client.close()
         if self._aliexpress_client:
             await self._aliexpress_client.close()
+
+    def _is_variant_candidate(self, candidate: CandidateProduct) -> bool:
+        """Check if candidate is a variant (not a master).
+
+        A candidate is a variant if it has a master_sku reference in normalized_attributes.
+        Masters have internal_sku set but no master_sku reference.
+
+        Args:
+            candidate: Candidate to check
+
+        Returns:
+            True if candidate is a variant, False if master or unknown
+        """
+        if not candidate.normalized_attributes:
+            return False
+
+        # Check for master_sku reference (indicates this is a variant)
+        return "master_sku" in candidate.normalized_attributes
 
     async def _recompute_approval_inputs(
         self,
@@ -138,6 +158,17 @@ class AutoActionEngine:
             recommendation_score *= 1.2  # +20% 加成
 
         recommendation_score = min(100.0, max(0.0, recommendation_score))
+
+        # 4. Variant-aware adjustment: if candidate is variant, apply variant penalty
+        if self._is_variant_candidate(candidate):
+            # Variants get -10% recommendation score penalty
+            recommendation_score *= 0.9
+            logger.info(
+                "variant_candidate_score_adjusted",
+                candidate_id=str(candidate.id),
+                original_score=float(priority_score) * 100.0,
+                adjusted_score=recommendation_score,
+            )
 
         return (recommendation_score, risk_score, margin_percentage)
 
@@ -194,6 +225,33 @@ class AutoActionEngine:
         # Default: require approval if doesn't meet auto-execute criteria
         return True, "does_not_meet_auto_execute_criteria"
 
+    async def _resolve_variant_linkage(
+        self,
+        candidate_id: UUID,
+    ) -> tuple[Optional[UUID], Optional[InventoryMode]]:
+        """Resolve product variant linkage for a candidate.
+
+        Returns:
+            (variant_id, inventory_mode) if candidate has been converted, else (None, None)
+        """
+        master_stmt = select(ProductMaster).where(
+            ProductMaster.candidate_product_id == candidate_id
+        )
+        master_result = await self.db.execute(master_stmt)
+        master = master_result.scalar_one_or_none()
+        if not master:
+            return None, None
+
+        variant_stmt = select(ProductVariant).where(
+            ProductVariant.master_id == master.id
+        ).order_by(ProductVariant.created_at)
+        variant_result = await self.db.execute(variant_stmt)
+        variant = variant_result.scalars().first()
+        if not variant:
+            return None, None
+
+        return variant.id, variant.inventory_mode
+
     async def auto_publish(
         self,
         candidate_id: UUID,
@@ -248,6 +306,9 @@ class AutoActionEngine:
             candidate=candidate,
         )
 
+        # Resolve variant linkage if candidate has been converted
+        variant_id, inventory_mode = await self._resolve_variant_linkage(candidate_id)
+
         # Check approval boundary
         approval_required, approval_reason = self._check_approval_required(
             candidate, recommendation_score, risk_score, margin_percentage, price
@@ -257,6 +318,8 @@ class AutoActionEngine:
         listing = PlatformListing(
             id=uuid4(),
             candidate_product_id=candidate_id,
+            product_variant_id=variant_id,
+            inventory_mode=inventory_mode,
             platform=platform,
             region=region,
             price=price,
@@ -272,6 +335,8 @@ class AutoActionEngine:
                 "margin_percentage": float(margin_percentage),
                 "created_by": "auto_action_engine",
                 "created_at": datetime.utcnow().isoformat(),
+                "product_variant_id": str(variant_id) if variant_id else None,
+                "inventory_mode": inventory_mode.value if inventory_mode else None,
             },
         )
 
@@ -374,6 +439,25 @@ class AutoActionEngine:
 
         This is called after approval or for auto-execute listings.
         """
+        # Check activation eligibility before publishing
+        from app.services.listing_activation_service import ListingActivationService
+
+        activation_service = ListingActivationService()
+        eligibility = await activation_service.check_activation_eligibility(self.db, listing.id)
+
+        if not eligibility.eligible:
+            listing.status = PlatformListingStatus.MANUAL_INTERVENTION_REQUIRED
+            listing.sync_error = f"Activation check failed: {eligibility.reason}"
+            logger.warning(
+                "listing_activation_check_failed",
+                listing_id=str(listing.id),
+                reason=eligibility.reason,
+                inventory_mode=eligibility.inventory_mode.value if eligibility.inventory_mode else None,
+                available_quantity=eligibility.available_quantity,
+                min_inventory_required=eligibility.min_inventory_required,
+            )
+            return
+
         listing.status = PlatformListingStatus.PUBLISHING
 
         # Get platform client

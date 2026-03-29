@@ -75,6 +75,7 @@ async def test_product_selector_uses_demand_discovery_before_fetching():
         enable_demand_validation=True,
         enable_seasonal_boost=False,
     )
+    agent.logger = MagicMock()
 
     context = AgentContext(
         strategy_run_id=uuid4(),
@@ -97,6 +98,19 @@ async def test_product_selector_uses_demand_discovery_before_fetching():
     assert mock_discovery.discover_keywords.call_args.kwargs["platform"] == "alibaba_1688"
     mock_adapter.fetch_products.assert_called_once()
     assert mock_adapter.fetch_products.call_args.kwargs["keywords"] == ["validated keyword"]
+    agent.logger.info.assert_any_call(
+        "product_selection_metrics",
+        strategy_run_id=str(context.strategy_run_id),
+        category="electronics",
+        region="US",
+        platform="alibaba_1688",
+        discovery_mode="generated",
+        skipped=False,
+        skip_rate=0.0,
+        selection_triggered_per_category=1,
+        candidate_count_per_discovery_mode=1,
+        validated_keywords_count=1,
+    )
 
 
 @pytest.mark.asyncio
@@ -138,6 +152,7 @@ async def test_product_selector_skips_fetch_when_no_validated_keywords():
         enable_demand_validation=True,
         enable_seasonal_boost=False,
     )
+    agent.logger = MagicMock()
 
     context = AgentContext(
         strategy_run_id=uuid4(),
@@ -158,3 +173,16 @@ async def test_product_selector_skips_fetch_when_no_validated_keywords():
     assert result.output_data["skipped_reason"] == "no_validated_keywords_available"
     assert result.output_data["demand_discovery"]["degraded"] is True
     mock_adapter.fetch_products.assert_not_called()
+    agent.logger.info.assert_any_call(
+        "product_selection_metrics",
+        strategy_run_id=str(context.strategy_run_id),
+        category="electronics",
+        region="US",
+        platform="alibaba_1688",
+        discovery_mode="none",
+        skipped=True,
+        skip_rate=1.0,
+        selection_triggered_per_category=0,
+        candidate_count_per_discovery_mode=0,
+        validated_keywords_count=0,
+    )

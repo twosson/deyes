@@ -1,20 +1,18 @@
 # 推荐服务 (Recommendation Service)
 
-> 最后更新: 2026-03-27
-> 版本: v2.0（新增用户反馈与数据分析）
+> 最后更新: 2026-03-29
+> 版本: v3.0（需求上下文集成）
+> 定位: 内部决策服务（已降级，不再作为主产品形态）
 
 ## 概述
 
-推荐服务为候选产品提供智能推荐，基于多维度评分帮助用户快速识别最有潜力的产品。
+推荐服务为候选产品提供智能推荐分数，作为内部决策引擎驱动候选排序与自动上架判断。
 
-### 核心功能
-
-1. **综合评分** - 基于优先级、利润率、风险、供应商质量的 0-100 分制评分
-2. **推荐理由** - 自动生成人类可读的推荐理由
+**核心功能：**
+1. **综合评分** - 基于优先级、利润率、风险、供应商质量、需求上下文的 0-100 分制评分
+2. **推荐理由** - 自动生成人类可读的推荐理由（含需求发现来源说明）
 3. **推荐等级** - HIGH/MEDIUM/LOW 三级分类
 4. **可解释性** - 透明的分数构成和权重说明
-5. **用户反馈** - 接受/拒绝/延后反馈机制（2026-03-27 新增）
-6. **数据分析** - 时间趋势、平台对比、反馈统计（2026-03-27 新增）
 
 ## 评分算法
 
@@ -25,7 +23,8 @@ recommendation_score (0-100) =
     priority_score * 40 +           # 优先级 40%
     margin_score * 30 +             # 利润率 30%
     risk_score_inverse * 20 +       # 风险反向 20%
-    supplier_quality * 10           # 供应商质量 10%
+    supplier_quality * 10 +         # 供应商质量 10%
+    demand_adjustment               # 需求上下文调整 (-6 至 +3)
 ```
 
 ### 各分量说明
@@ -77,6 +76,21 @@ recommendation_score (0-100) =
 - 70% 置信度 → 7.0 分
 - 30% 置信度 → 3.0 分
 
+#### 5. 需求上下文调整（v3.0 新增）
+
+来源：`CandidateProduct.demand_discovery_metadata`
+
+| discovery_mode | adjustment |
+|----------------|------------|
+| user | +3.0 |
+| generated | +1.0 |
+| fallback | -4.0 |
+| none | -6.0 |
+
+附加调整：
+- `degraded=True`: -2.0
+- `fallback_used=True` (非 fallback 模式): -1.0
+
 ## 推荐等级
 
 ### 等级划分
@@ -84,41 +98,44 @@ recommendation_score (0-100) =
 | 等级 | 分数范围 | 说明 |
 |------|---------|------|
 | **HIGH** | ≥ 75 | 强烈推荐，优先上架 |
-| **MEDIUM** | 60-74 | 可以考虑，���评估 |
+| **MEDIUM** | 60-74 | 可以考虑，需评估 |
 | **LOW** | < 60 | 不建议上架 |
 
 ### 典型案例
 
-#### HIGH 级别产品 (77 分)
+#### HIGH 级别产品 (80 分)
 ```
 - 优先级评分: 36.0 (0.9 * 40)
 - 利润率评分: 13.5 (45% * 30)
 - 风险评分: 18.0 ((100-10)/100 * 20)
 - 供应商评分: 9.5 (0.95 * 10)
-总分: 77.0
+- 需求上下文: +3.0 (user 模式)
+总分: 80.0
 ```
 
-#### MEDIUM 级别产品 (65 分)
+#### MEDIUM 级别产品 (61 分)
 ```
 - 优先级评分: 28.0 (0.7 * 40)
 - 利润率评分: 10.5 (35% * 30)
 - 风险评分: 14.0 ((100-30)/100 * 20)
 - 供应商评分: 8.0 (0.8 * 10)
-总分: 60.5
+- 需求上下文: +1.0 (generated 模式)
+总分: 61.5
 ```
 
-#### LOW 级别产品 (32 分)
+#### LOW 级别产品 (24 分)
 ```
 - 优先级评分: 12.0 (0.3 * 40)
 - 利润率评分: 6.0 (20% * 30)
 - 风险评分: 8.0 ((100-60)/100 * 20)
 - 供应商评分: 6.0 (0.6 * 10)
-总分: 32.0
+- 需求上下文: -8.0 (fallback 模式 -4, degraded -2, fallback_used -1, lower clamp applied in implementation if needed)
+总分: 24.0
 ```
 
 ## 推荐理由规则
 
-### 利润���理由
+### 利润率理由
 
 | 条件 | 理由 |
 |------|------|
@@ -141,6 +158,17 @@ recommendation_score (0-100) =
 | LOW | "低竞争蓝海市场" |
 | MEDIUM | "中等竞争市场" |
 | HIGH | "高竞争红海市场，需谨慎评估" |
+
+### 需求发现理由（v3.0 新增）
+
+| 条件 | 理由 |
+|------|------|
+| user | "需求关键词已人工确认" |
+| generated | "基于生成关键词完成需求发现" |
+| fallback | "使用回退关键词发现候选，建议谨慎验证" |
+| none | "缺少有效需求关键词支撑，建议人工复核" |
+| degraded=True | "需求发现过程存在降级，建议补充验证" |
+| fallback_used=True | "需求发现使用了部分回退信号" |
 
 ### 风险理由
 
@@ -166,406 +194,6 @@ recommendation_score (0-100) =
 | 评分 ≥ 4.0 | "良好评分（X.X星）" |
 | 评分 < 3.5 | "评分偏低（X.X星），需注意质量" |
 
-## API 使用示例
-
-### 1. 获取推荐列表
-
-```bash
-GET /api/v1/recommendations?limit=20&min_score=60
-```
-
-**参数：**
-- `limit` (可选) - 返回数量，默认 20，范围 1-100
-- `category` (可选) - 筛选品类
-- `min_score` (可选) - 最低推荐分数，默认 60
-- `risk_level` (可选) - 筛选风险等级 (PASS/REVIEW/REJECT)
-
-**响应示例：**
-```json
-{
-  "items": [
-    {
-      "candidate_id": "uuid",
-      "title": "Product Title",
-      "category": "electronics",
-      "source_platform": "temu",
-      "platform_price": 50.0,
-      "recommendation_score": 77.0,
-      "recommendation_level": "HIGH",
-      "reasons": [
-        "高利润率产品（45.0%）",
-        "即将到来的节假日，需求旺盛（+50%）",
-        "低竞争蓝海市场",
-        "合规风险低，可安全上架",
-        "高销量验证（5000单）",
-        "高评分产品（4.8星）"
-      ],
-      "score_breakdown": {
-        "priority_component": 36.0,
-        "margin_component": 13.5,
-        "risk_component": 18.0,
-        "supplier_component": 9.5,
-        "total_score": 77.0
-      },
-      "priority_score": 0.9,
-      "margin_percentage": 45.0,
-      "risk_decision": "PASS",
-      "risk_score": 10,
-      "created_at": "2026-03-27T10:00:00Z"
-    }
-  ],
-  "count": 1,
-  "filters": {
-    "category": null,
-    "min_score": 60.0,
-    "risk_level": null
-  }
-}
-```
-
-### 2. 获取单个候选推荐详情
-
-```bash
-GET /api/v1/candidates/{candidate_id}/recommendation
-```
-
-**响应示例：**
-```json
-{
-  "candidate_id": "uuid",
-  "title": "Product Title",
-  "category": "electronics",
-  "source_platform": "temu",
-  "source_url": "https://...",
-  "platform_price": 50.0,
-  "sales_count": 5000,
-  "rating": 4.8,
-  "recommendation": {
-    "score": 77.0,
-    "level": "HIGH",
-    "reasons": [
-      "高利润率产品（45.0%）",
-      "即将到来的节假日，需求旺盛（+50%）",
-      "低竞争蓝海市场",
-      "合规风险低，可安全上架",
-      "高销量验证（5000单）",
-      "高评分产品（4.8星）"
-    ],
-    "score_breakdown": {
-      "total_score": 77.0,
-      "components": [
-        {
-          "name": "priority_score",
-          "value": 36.0,
-          "weight": "40%",
-          "description": "综合优先级（季节性、销量、评分、竞争密度）"
-        },
-        {
-          "name": "margin_score",
-          "value": 13.5,
-          "weight": "30%",
-          "description": "利润率评分"
-        },
-        {
-          "name": "risk_score",
-          "value": 18.0,
-          "weight": "20%",
-          "description": "风险反向评分（风险越低分数越高）"
-        },
-        {
-          "name": "supplier_quality",
-          "value": 9.5,
-          "weight": "10%",
-          "description": "供应商质量评分"
-        }
-      ]
-    }
-  },
-  "pricing_summary": {
-    "margin_percentage": 45.0,
-    "profitability_decision": "profitable",
-    "recommended_price": 55.0
-  },
-  "risk_summary": {
-    "score": 10,
-    "decision": "pass",
-    "rule_hits": []
-  },
-  "best_supplier": {
-    "supplier_name": "Supplier Name",
-    "supplier_price": 20.0,
-    "confidence_score": 0.95,
-    "moq": 10
-  }
-}
-```
-
-### 3. 提交用户反馈（2026-03-27 新增）
-
-```bash
-POST /api/v1/recommendations/{candidate_id}/feedback
-```
-
-**请求体：**
-```json
-{
-  "action": "accepted",  // accepted, rejected, deferred
-  "comment": "利润率很好，准备上架"  // 可选
-}
-```
-
-**响应示例：**
-```json
-{
-  "id": "uuid",
-  "candidate_product_id": "uuid",
-  "action": "accepted",
-  "comment": "利润率很好，准备上架",
-  "metadata": {
-    "recommendation_score": 77.0,
-    "recommendation_level": "HIGH",
-    "source_platform": "temu"
-  },
-  "created_at": "2026-03-27T10:00:00Z"
-}
-```
-
-### 4. 获取推荐时间趋势（2026-03-27 新增）
-
-```bash
-GET /api/v1/recommendations/stats/trends?period=day&days=30&min_score=60
-```
-
-**参数：**
-- `period` (可选) - 聚合周期：day/week/month，默认 day
-- `days` (可选) - 回溯天数，默认 30，范围 1-365
-- `min_score` (可选) - 最低推荐分数，默认 60
-
-**响应示例：**
-```json
-{
-  "period": "day",
-  "days": 30,
-  "min_score": 60.0,
-  "data": [
-    {
-      "date": "2026-03-27",
-      "count": 15,
-      "average_score": 72.5
-    },
-    {
-      "date": "2026-03-26",
-      "count": 12,
-      "average_score": 68.3
-    }
-  ]
-}
-```
-
-### 5. 获取平台对比分析（2026-03-27 新增）
-
-```bash
-GET /api/v1/recommendations/stats/by-platform?min_score=60
-```
-
-**参数：**
-- `min_score` (可选) - 最低推荐分数，默认 60
-
-**响应示例：**
-```json
-{
-  "min_score": 60.0,
-  "data": [
-    {
-      "platform": "temu",
-      "count": 45,
-      "average_score": 72.5,
-      "high_quality_count": 20,
-      "high_quality_percentage": 44.44
-    },
-    {
-      "platform": "amazon",
-      "count": 30,
-      "average_score": 68.3,
-      "high_quality_count": 10,
-      "high_quality_percentage": 33.33
-    }
-  ]
-}
-```
-
-### 6. 获取用户反馈统计（2026-03-27 新增）
-
-```bash
-GET /api/v1/recommendations/stats/feedback?days=30
-```
-
-**参数：**
-- `days` (可选) - 回溯天数，默认 30，范围 1-365
-
-**响应示例：**
-```json
-{
-  "days": 30,
-  "total_feedback": 50,
-  "data": [
-    {
-      "action": "accepted",
-      "count": 30
-    },
-    {
-      "action": "rejected",
-      "count": 15
-    },
-    {
-      "action": "deferred",
-      "count": 5
-    }
-  ]
-}
-```
-
-### 7. 获取推荐统计概览
-
-```bash
-GET /api/v1/recommendations/stats/overview?min_score=60
-```
-
-**参数：**
-- `min_score` (可选) - 最低推荐分数，默认 60
-
-**响应示例：**
-```json
-{
-  "total_recommendations": 100,
-  "average_score": 70.5,
-  "high_quality_count": 35,
-  "high_quality_percentage": 35.0,
-  "by_level": {
-    "HIGH": 35,
-    "MEDIUM": 45,
-    "LOW": 20
-  },
-  "by_category": {
-    "electronics": 40,
-    "home": 30,
-    "fashion": 30
-  }
-}
-```
-
----
-
-## 前端集成
-
-### 推荐页面组件
-
-**位置：** `frontend/src/pages/recommendations/RecommendationsPage.vue`
-
-**功能模块：**
-
-1. **推荐列表**（表格）
-   - 推荐等级、分数、产品标题、品类、平台、价格
-   - 点击查看详情
-
-2. **推荐详情**（抽屉）
-   - 推荐分数分解
-   - 推荐理由
-   - 定价摘要
-   - 风险摘要
-   - 最佳供应商
-   - **反馈按钮**（接受/拒绝/延后）- line 593
-
-3. **推荐分析看板**（标签页）
-   - **时间趋势图表** - line 146
-   - **平台对比图表** - line 186
-   - **用户反馈统计图表** - line 227
-
-### TanStack Query Hooks
-
-**推荐查询：**
-```typescript
-import { useRecommendationsQuery } from '@/queries/useRecommendationsQuery'
-
-const filters = ref({
-  min_score: 60,
-  category: undefined,
-  risk_level: undefined,
-  limit: 20,
-})
-
-const recommendationsQuery = useRecommendationsQuery(filters)
-```
-
-**反馈提交：**
-```typescript
-import { useCreateFeedbackMutation } from '@/queries/useFeedbackMutation'
-
-const createFeedbackMutation = useCreateFeedbackMutation()
-
-async function handleFeedback(action: 'accepted' | 'rejected' | 'deferred', comment?: string) {
-  await createFeedbackMutation.mutateAsync({
-    candidateId: selectedCandidateId.value,
-    payload: { action, comment },
-  })
-  message.success('反馈已提交')
-}
-```
-
-**分析查询：**
-```typescript
-import {
-  useRecommendationTrendsQuery,
-  useRecommendationsByPlatformQuery,
-  useRecommendationFeedbackStatsQuery,
-} from '@/queries/useRecommendationsQuery'
-
-const analyticsParams = ref({
-  period: 'day' as 'day' | 'week' | 'month',
-  days: 30,
-  min_score: 60,
-})
-
-const trendsQuery = useRecommendationTrendsQuery(analyticsParams)
-const platformQuery = useRecommendationsByPlatformQuery(
-  computed(() => ({ min_score: analyticsParams.value.min_score })),
-)
-const feedbackQuery = useRecommendationFeedbackStatsQuery(
-  computed(() => ({ days: analyticsParams.value.days })),
-)
-```
-
----
-
-## 数据库模型
-
-### RecommendationFeedback 表（2026-03-27 新增）
-
-**位置：** `backend/app/db/models.py:271`
-
-**字段：**
-```python
-class RecommendationFeedback(Base, TimestampMixin):
-    """User feedback on recommendation decisions."""
-
-    id: UUID
-    candidate_product_id: UUID  # 外键到 candidate_products
-    action: FeedbackAction  # accepted, rejected, deferred
-    comment: Optional[str]  # 可选文本评论
-    metadata_: Optional[dict]  # 推荐分数、等级、平台等元数据
-    created_at: datetime
-    updated_at: datetime
-```
-
-**索引：**
-- `candidate_product_id` - 查询特定候选的反馈
-- `action` - 按反馈类型聚合统计
-
-**关联：**
-- `candidate: CandidateProduct` - 反向关联到候选产品
-
----
-
 ## 服务实现
 
 ### RecommendationService
@@ -581,8 +209,11 @@ class RecommendationService:
         margin_percentage: Optional[Decimal],
         risk_score: Optional[int],
         supplier_confidence: Optional[Decimal],
+        discovery_mode: Optional[str] = None,
+        degraded: bool = False,
+        fallback_used: bool = False,
     ) -> tuple[float, dict]:
-        """计算推荐分数（0-100）"""
+        """计算推荐分数（0-100），包含需求上下文调整"""
 
     def generate_recommendation_reasons(
         self,
@@ -593,205 +224,55 @@ class RecommendationService:
         sales_count: Optional[int],
         rating: Optional[Decimal],
         profitability_decision: Optional[ProfitabilityDecision],
+        discovery_mode: Optional[str] = None,
+        degraded: bool = False,
+        fallback_used: bool = False,
     ) -> list[str]:
-        """生成推荐理由"""
+        """生成推荐理由，包含需求发现来源说明"""
 
     def get_recommendation_level(self, score: float) -> str:
-        """判断推荐等级"""
+        """判断推荐等级：HIGH (≥75), MEDIUM (60-74), LOW (<60)"""
 
     def explain_score_breakdown(self, score_breakdown: dict) -> dict:
         """解释分数构成"""
 ```
 
-### RecommendationFeedbackService（2026-03-27 新增）
+### API 调用入口
 
-**位置：** `backend/app/services/recommendation_feedback_service.py:9`
+**位置：** `backend/app/api/routes_recommendations.py`
 
-**核心方法：**
-```python
-class RecommendationFeedbackService:
-    async def create_feedback(
-        self,
-        db: AsyncSession,
-        candidate: CandidateProduct,
-        action: str,
-        comment: str | None = None,
-        metadata: dict | None = None,
-    ) -> RecommendationFeedback:
-        """创建反馈并记录 RunEvent 审计日志"""
-```
-
----
-
-## 测试
-
-### 单元测试
-
-**推荐服务测试：**
-- `backend/tests/test_recommendation_service.py`
-
-**反馈服务测试：**
-- `backend/tests/test_recommendation_feedback.py`（2026-03-27 新增）
-
-**需求验证测试：**
-- `backend/tests/test_demand_validator.py`
-
-### 前端测试
-
-**推荐查询测试：**
-- `frontend/src/queries/useRecommendationsQuery.spec.ts`（2026-03-27 新增）
-
----
-
-## 更新日志
-
-### v2.0 (2026-03-27)
-
-**新增功能：**
-- ✅ 用户反馈机制（接受/拒绝/延后）
-- ✅ 反馈 API 端点（POST /recommendations/{id}/feedback）
-- ✅ 时间趋势分析 API（GET /recommendations/stats/trends）
-- ✅ 平台对比分析 API（GET /recommendations/stats/by-platform）
-- ✅ 反馈统计 API（GET /recommendations/stats/feedback）
-- ✅ 前端反馈按钮 UI
-- ✅ 前端分析看板（ECharts 图表）
-- ✅ RecommendationFeedback 数据模型
-- ✅ RecommendationFeedbackService 服务层
-- ✅ RunEvent 审计日志集成
-
-**代码变更：**
-- 19 个文件修改/新增
-- +1,012 行代码
-
-### v1.0 (2026-03-20)
-
-**初始功能：**
-- ✅ 推荐评分算法
-- ✅ 推荐理由生成
-- ✅ 推荐等级判断
-- ✅ 推荐列表 API
-- ✅ 推荐详情 API
-- ✅ 推荐概览 API
-
----
-
-**文档维护**: 本文档应在推荐服务功能更新后同步更新
-          "weight": "30%",
-          "description": "利润率评分"
-        },
-        {
-          "name": "risk_score_inverse",
-          "value": 18.0,
-          "weight": "20%",
-          "description": "风险反向评分（低风险=高分）"
-        },
-        {
-          "name": "supplier_quality",
-          "value": 9.5,
-          "weight": "10%",
-          "description": "供应商质量评分"
-        }
-      ]
-    }
-  },
-  "pricing_summary": {
-    "margin_percentage": 45.0,
-    "profitability_decision": "PROFITABLE",
-    "recommended_price": 55.0
-  },
-  "risk_summary": {
-    "score": 10,
-    "decision": "PASS",
-    "rule_hits": [...]
-  },
-  "best_supplier": {
-    "supplier_name": "Supplier Name",
-    "supplier_price": 25.0,
-    "confidence_score": 0.95,
-    "moq": 100
-  },
-  "normalized_attributes": {...},
-  "created_at": "2026-03-27T10:00:00Z"
-}
-```
-
-## 评分权重调整指南
-
-### 当前权重配置
+所有推荐 API 端点均从 `CandidateProduct.demand_discovery_metadata` 提取需求上下文，并传入 RecommendationService：
 
 ```python
-# backend/app/services/recommendation_service.py
+demand_metadata = candidate.demand_discovery_metadata or {}
 
-# 推荐分数权重
-PRIORITY_WEIGHT = 40%      # 优先级（季节性、销量、评分、竞争）
-MARGIN_WEIGHT = 30%        # 利润率
-RISK_WEIGHT = 20%          # 风险反向
-SUPPLIER_WEIGHT = 10%      # 供应商质量
+score, breakdown = recommendation_service.calculate_recommendation_score(
+    priority_score=normalized_attrs.get("priority_score"),
+    margin_percentage=pricing.margin_percentage if pricing else None,
+    risk_score=risk.score if risk else None,
+    supplier_confidence=best_supplier.confidence_score if best_supplier else None,
+    discovery_mode=demand_metadata.get("discovery_mode"),
+    degraded=bool(demand_metadata.get("degraded", False)),
+    fallback_used=bool(demand_metadata.get("fallback_used", False)),
+)
 
-# 推荐等级阈值
-HIGH_THRESHOLD = 75.0      # HIGH 级别
-MEDIUM_THRESHOLD = 60.0    # MEDIUM 级别
+reasons = recommendation_service.generate_recommendation_reasons(
+    margin_percentage=pricing.margin_percentage if pricing else None,
+    seasonal_boost=normalized_attrs.get("seasonal_boost"),
+    competition_density=normalized_attrs.get("competition_density"),
+    risk_decision=risk.decision if risk else None,
+    sales_count=candidate.sales_count,
+    rating=candidate.rating,
+    profitability_decision=pricing.profitability_decision if pricing else None,
+    discovery_mode=demand_metadata.get("discovery_mode"),
+    degraded=bool(demand_metadata.get("degraded", False)),
+    fallback_used=bool(demand_metadata.get("fallback_used", False)),
+)
 ```
 
-### 调整场景
+## 数据依赖
 
-#### 场景 1：更重视利润率
-
-如果希望更重视利润率，可以调整权重：
-
-```python
-PRIORITY_WEIGHT = 35%      # 降低 5%
-MARGIN_WEIGHT = 35%        # 提高 5%
-RISK_WEIGHT = 20%          # 保持
-SUPPLIER_WEIGHT = 10%      # 保持
-```
-
-#### 场景 2：更重视风险控制
-
-如果希望更重视风险控制：
-
-```python
-PRIORITY_WEIGHT = 35%      # 降低 5%
-MARGIN_WEIGHT = 25%        # 降低 5%
-RISK_WEIGHT = 30%          # 提高 10%
-SUPPLIER_WEIGHT = 10%      # 保持
-```
-
-#### 场景 3：调整推荐等级阈值
-
-如果希望更严格的推荐标准：
-
-```python
-HIGH_THRESHOLD = 80.0      # 提高到 80
-MEDIUM_THRESHOLD = 65.0    # 提高到 65
-```
-
-### 权重调整步骤
-
-1. **修改服务代码**
-   ```bash
-   vim backend/app/services/recommendation_service.py
-   ```
-
-2. **更新测试用例**
-   ```bash
-   vim backend/tests/test_recommendation_service.py
-   ```
-
-3. **运行测试验证**
-   ```bash
-   cd backend
-   pytest tests/test_recommendation_service.py -v
-   ```
-
-4. **更新文档**
-   ```bash
-   vim docs/services/recommendation-service.md
-   ```
-
-## 与现有系统集成
-
-### 数据依赖
+### 输入字段
 
 推荐服务依赖以下数据：
 
@@ -799,6 +280,9 @@ MEDIUM_THRESHOLD = 65.0    # 提高到 65
    - `normalized_attributes["priority_score"]` - 优先级评分
    - `normalized_attributes["seasonal_boost"]` - 季节性加权
    - `normalized_attributes["competition_density"]` - 竞争密度
+   - `demand_discovery_metadata["discovery_mode"]` - 需求发现模式
+   - `demand_discovery_metadata["degraded"]` - 是否降级
+   - `demand_discovery_metadata["fallback_used"]` - 是否使用回退
    - `sales_count` - 销量
    - `rating` - 评分
 
@@ -813,103 +297,55 @@ MEDIUM_THRESHOLD = 65.0    # 提高到 65
 4. **SupplierMatch** - 供应商匹配
    - `confidence_score` - 置信度评分
 
-### 工作流集成
+## 测试
 
-推荐服务可以集成到以下工作流：
+### 单元测试
 
-1. **选品流程** - 在 ProductSelectorAgent 完成后调用
-2. **定价流程** - 在 PricingAnalystAgent 完成后调用
-3. **风控流程** - 在 RiskControllerAgent 完成后调用
-4. **人工审核** - 为审核人员提供推荐参考
+**推荐服务测试：**
+- `backend/tests/test_recommendation_service.py`
+  - 推荐分数计算测试（高/中/低质量产品）
+  - 推荐理由生成测试（含需求发现理由）
+  - 需求上下文调整测试
+  - 推荐等级判断测试
+  - 分数分解解释测试
 
-### 前端集成
+**风控规则测试：**
+- `backend/tests/test_risk_rules.py`（合规规则基线）
+- `backend/tests/test_competition_risk.py`（竞争密度 + 需求发现质量规则）
 
-前端可以使用推荐 API 实现：
+## 更新日志
 
-1. **推荐列表页** - 展示 TOP 推荐产品
-2. **产品详情页** - 展示推荐分数和理由
-3. **筛选功能** - 按品类、风险等级筛选
-4. **排序功能** - 按推荐分数排序
+### v3.0 (2026-03-29)
 
-## 性能考虑
+**核心变更：**
+- ✅ 评分公式新增 `demand_adjustment` 分量（-6 至 +3）
+- ✅ `calculate_recommendation_score()` 新增 `discovery_mode`、`degraded`、`fallback_used` 参数
+- ✅ `generate_recommendation_reasons()` 新增需求发现相关理由
+- ✅ 所有推荐 API 端点传入需求上下文
+- ✅ 推荐理由包含需求发现来源与降级说明
 
-### 计算复杂度
+**定位变更：**
+- 推荐服务降级为内部决策引擎
+- 推荐 API 保留用于审批工作台与监控面板
 
-- **推荐分数计算** - O(1)，纯数学计算
-- **推荐理由生成** - O(1)，规则匹配
-- **列表查询** - O(n)，需遍历所有候选
+### v2.0 (2026-03-27)
 
-### 优化建议
+**新增功能：**
+- ✅ 用户反馈机制（接受/拒绝/延后）
+- ✅ 时间趋势分析 API
+- ✅ 平台对比分析 API
+- ✅ 反馈统计 API
 
-1. **缓存推荐结果** - 如果候选数据不频繁变化，可以缓存推荐结果
-2. **异步计算** - 在后台定时计算推荐分数，存储到数据库
-3. **分页查询** - 使用 `limit` 参数限制返回数量
+### v1.0 (2026-03-20)
 
-### 扩展性
-
-当候选产品数量增长时：
-
-1. **数据库索引** - 为 `priority_score`、`margin_percentage` 等字段添加索引
-2. **物化视图** - 创建推荐分数的物化视图
-3. **搜索引擎** - 使用 Elasticsearch 等搜索引擎加速查询
-
-## 监控和调优
-
-### 关键指标
-
-1. **推荐准确率** - 推荐产品的实际上架率
-2. **推荐覆盖率** - HIGH/MEDIUM/LOW 级别的分布
-3. **API 响应时间** - 推荐 API 的响应时间
-4. **用户反馈** - 用户对推荐结果的反馈
-
-### 调优方向
-
-1. **权重调整** - 根据实际效果调整各分量权重
-2. **阈值调整** - 根据业务需求调整推荐等级阈值
-3. **理由优化** - 根据用户反馈优化推荐理由文案
-
-## 常见问题
-
-### Q1: 为什么我的产品推荐分数很低？
-
-A: 检查以下维度：
-- 优先级评分是否偏低（季节性、销量、评分、竞争）
-- 利润率是否低于 35%
-- 风险评分是否偏高
-- 供应商置信度是否偏低
-
-### Q2: 如何提高推荐分数？
-
-A: 可以从以下方面优化：
-- 选择季节性需求旺盛的产品
-- 提高利润率（优化供应商价格或提高售价）
-- 降低风险（避免品牌侵权、选择低竞争市场）
-- 选择高置信度的供应商
-
-### Q3: 推荐等级 MEDIUM 的产品是否值得上架？
-
-A: 需要综合评估：
-- 查看推荐理由，了解优势和劣势
-- 查看分数构成，找出薄弱环节
-- 考虑优化空间（如提高利润率、降低风险）
-
-### Q4: 如何批量获取推荐结果？
-
-A: 使用列表 API：
-```bash
-GET /api/v1/recommendations?limit=100&min_score=0
-```
-
-### Q5: 推荐分数会实时更新吗？
-
-A: 推荐分数基于候选产品的当前数据实时计算，当以下数据变化时，推荐分数会自动更新：
-- 优先级评分（季节性变化）
-- 利润率（定价调整）
-- 风险评分（风控规则变化）
-- 供应商置信度（供应商匹配更新）
+**初始功能：**
+- ✅ 推荐评分算法
+- ✅ 推荐理由生成
+- ✅ 推荐等级判断
+- ✅ 推荐列表/详情 API
 
 ---
 
-**最后更新**: 2026-03-27
-**服务版本**: v1.0
-**文档状态**: 生产就绪
+**最后更新**: 2026-03-29
+**服务版本**: v3.0
+**文档状态**: 已同步最新代码

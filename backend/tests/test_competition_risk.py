@@ -1,7 +1,8 @@
-"""Tests for competition density risk assessment (Phase 2)."""
+"""Tests for competition density and demand discovery risk assessment."""
 import pytest
 from app.services.risk_rules import (
     CompetitionDensityRule,
+    DemandDiscoveryRiskRule,
     RiskAssessmentResult,
     RiskRulesEngine,
 )
@@ -66,8 +67,91 @@ class TestCompetitionDensityRule:
         assert rule.weight == 30
 
 
+
+
+class TestDemandDiscoveryRiskRule:
+    """Test demand discovery quality rule."""
+
+    def test_user_discovery_has_no_extra_risk(self):
+        """User-provided validated keywords should have zero additional risk."""
+        rule = DemandDiscoveryRiskRule()
+        product_data = {
+            "discovery_mode": "user",
+            "degraded": False,
+            "fallback_used": False,
+        }
+
+        hit, reason = rule.evaluate(product_data)
+
+        assert hit is False
+        assert reason is None
+        assert rule.weight == 0
+
+    def test_generated_discovery_has_moderate_risk(self):
+        """Generated keywords should add moderate discovery risk."""
+        rule = DemandDiscoveryRiskRule()
+        product_data = {
+            "discovery_mode": "generated",
+            "degraded": False,
+            "fallback_used": False,
+        }
+
+        hit, reason = rule.evaluate(product_data)
+
+        assert hit is True
+        assert "discovery_mode=generated" in reason
+        assert rule.weight == 10
+
+    def test_fallback_discovery_increases_scrutiny(self):
+        """Fallback sourcing should receive higher risk weighting."""
+        rule = DemandDiscoveryRiskRule()
+        product_data = {
+            "discovery_mode": "fallback",
+            "degraded": False,
+            "fallback_used": True,
+        }
+
+        hit, reason = rule.evaluate(product_data)
+
+        assert hit is True
+        assert "discovery_mode=fallback" in reason
+        assert "fallback_used=True (+5)" in reason
+        assert rule.weight == 30
+
+    def test_degraded_discovery_adds_penalty(self):
+        """Degraded discovery should add extra risk points."""
+        rule = DemandDiscoveryRiskRule()
+        product_data = {
+            "discovery_mode": "generated",
+            "degraded": True,
+            "fallback_used": False,
+        }
+
+        hit, reason = rule.evaluate(product_data)
+
+        assert hit is True
+        assert "degraded=True (+10)" in reason
+        assert rule.weight == 20
+
+    def test_none_discovery_is_highest_risk(self):
+        """Missing validated keywords should be treated as highest risk."""
+        rule = DemandDiscoveryRiskRule()
+        product_data = {
+            "discovery_mode": "none",
+            "degraded": True,
+            "fallback_used": False,
+        }
+
+        hit, reason = rule.evaluate(product_data)
+
+        assert hit is True
+        assert "discovery_mode=none" in reason
+        assert rule.weight == 50
+
+
+
 class TestRiskAssessmentResultCombined:
-    """Test combined risk assessment (Phase 2)."""
+    """Test combined risk assessment."""
 
     def test_combined_scoring(self):
         """Test combined compliance and competition scoring."""
@@ -91,7 +175,26 @@ class TestRiskAssessmentResultCombined:
         assert result.competition_score == 80
         # Total = 50 * 0.6 + 80 * 0.4 = 30 + 32 = 62
         assert result.total_score == 62
+        assert result.score == 62
         assert result.decision == RiskDecision.REVIEW
+
+    def test_discovery_risk_accumulates_with_competition_risk(self):
+        """Discovery quality risk should add to competition score."""
+        result = RiskAssessmentResult()
+
+        comp_rule = CompetitionDensityRule()
+        comp_rule.weight = 50
+        result.add_hit(comp_rule, "Medium competition")
+
+        discovery_rule = DemandDiscoveryRiskRule()
+        discovery_rule.weight = 30
+        result.add_hit(discovery_rule, "Fallback discovery")
+
+        result.finalize()
+
+        assert result.competition_score == 80
+        assert result.total_score == 32
+        assert result.decision == RiskDecision.PASS
 
     def test_high_compliance_low_competition(self):
         """Test high compliance risk with low competition."""
@@ -117,8 +220,6 @@ class TestRiskAssessmentResultCombined:
     def test_low_compliance_high_competition(self):
         """Test low compliance risk with high competition."""
         result = RiskAssessmentResult()
-
-        # No compliance risk (0)
 
         # High competition risk (80)
         comp_rule = CompetitionDensityRule()
@@ -156,8 +257,6 @@ class TestRiskAssessmentResultCombined:
         """Test both compliance and competition low risk."""
         result = RiskAssessmentResult()
 
-        # No compliance risk (0)
-
         # Low competition risk (20)
         comp_rule = CompetitionDensityRule()
         comp_rule.weight = 20
@@ -175,7 +274,10 @@ class TestRiskRulesEngineWithCompetition:
 
     def test_engine_with_competition_enabled(self):
         """Test engine with competition risk enabled."""
-        engine = RiskRulesEngine(enable_competition_risk=True)
+        engine = RiskRulesEngine(
+            enable_competition_risk=True,
+            enable_demand_discovery_risk=False,
+        )
 
         product_data = {
             "title": "Generic phone case",
@@ -192,7 +294,10 @@ class TestRiskRulesEngineWithCompetition:
 
     def test_engine_with_competition_disabled(self):
         """Test engine with competition risk disabled."""
-        engine = RiskRulesEngine(enable_competition_risk=False)
+        engine = RiskRulesEngine(
+            enable_competition_risk=False,
+            enable_demand_discovery_risk=False,
+        )
 
         product_data = {
             "title": "Generic phone case",
@@ -209,7 +314,10 @@ class TestRiskRulesEngineWithCompetition:
 
     def test_engine_combined_assessment(self):
         """Test engine with both compliance and competition risks."""
-        engine = RiskRulesEngine(enable_competition_risk=True)
+        engine = RiskRulesEngine(
+            enable_competition_risk=True,
+            enable_demand_discovery_risk=False,
+        )
 
         product_data = {
             "title": "Nike shoes",  # Brand keyword
@@ -229,7 +337,10 @@ class TestRiskRulesEngineWithCompetition:
 
     def test_result_to_dict(self):
         """Test result serialization includes all scores."""
-        engine = RiskRulesEngine(enable_competition_risk=True)
+        engine = RiskRulesEngine(
+            enable_competition_risk=True,
+            enable_demand_discovery_risk=False,
+        )
 
         product_data = {
             "title": "Phone case",
@@ -250,3 +361,52 @@ class TestRiskRulesEngineWithCompetition:
         assert result_dict["compliance_score"] == 0
         assert result_dict["competition_score"] == 50
         assert result_dict["score"] == 20  # 0 * 0.6 + 50 * 0.4
+
+    def test_engine_with_demand_discovery_enabled(self):
+        """Test engine with demand discovery risk enabled."""
+        engine = RiskRulesEngine(
+            enable_competition_risk=True,
+            enable_demand_discovery_risk=True,
+        )
+
+        product_data = {
+            "title": "Generic phone case",
+            "category": "electronics",
+            "platform_price": 15.0,
+            "competition_density": "medium",
+            "discovery_mode": "fallback",
+            "degraded": True,
+            "fallback_used": True,
+        }
+
+        result = engine.assess(product_data)
+
+        # Competition: medium (50) + fallback (25) + degraded (+10) + fallback_used (+5) = 90
+        assert result.competition_score == 90
+        # Total = 0 * 0.6 + 90 * 0.4 = 36
+        assert result.total_score == 36
+        assert result.decision == RiskDecision.PASS
+
+    def test_engine_with_demand_discovery_disabled(self):
+        """Test engine with demand discovery risk disabled."""
+        engine = RiskRulesEngine(
+            enable_competition_risk=True,
+            enable_demand_discovery_risk=False,
+        )
+
+        product_data = {
+            "title": "Generic phone case",
+            "category": "electronics",
+            "platform_price": 15.0,
+            "competition_density": "medium",
+            "discovery_mode": "fallback",
+            "degraded": True,
+            "fallback_used": True,
+        }
+
+        result = engine.assess(product_data)
+
+        # Only competition density should be counted
+        assert result.competition_score == 50
+        assert result.total_score == 20
+        assert result.decision == RiskDecision.PASS

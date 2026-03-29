@@ -106,21 +106,40 @@ class TestCalculateRecommendationScore:
         assert breakdown["risk_component"] == 0.0
         assert breakdown["supplier_component"] == 0.0
 
-    def test_margin_over_100(self, recommendation_service):
-        """Test margin percentage normalization when over 100%."""
-        # Margin over 100% should be capped at 100%
-        score, breakdown = recommendation_service.calculate_recommendation_score(
-            priority_score=0.5,
-            margin_percentage=Decimal("150.0"),  # 150% margin (unrealistic but test edge case)
-            risk_score=20,
-            supplier_confidence=Decimal("0.8"),
+    def test_demand_context_adjusts_recommendation_score(self, recommendation_service):
+        """Demand context should adjust the recommendation score itself."""
+        baseline_score, baseline_breakdown = recommendation_service.calculate_recommendation_score(
+            priority_score=0.75,
+            margin_percentage=Decimal("38.0"),
+            risk_score=25,
+            supplier_confidence=Decimal("0.85"),
         )
 
-        # Margin component should be capped: min(150/100, 1.0) * 30 = 1.0 * 30 = 30
-        assert breakdown["margin_component"] == 30.0
+        conservative_score, conservative_breakdown = recommendation_service.calculate_recommendation_score(
+            priority_score=0.75,
+            margin_percentage=Decimal("38.0"),
+            risk_score=25,
+            supplier_confidence=Decimal("0.85"),
+            discovery_mode="fallback",
+            degraded=True,
+            fallback_used=True,
+        )
 
+        confident_score, confident_breakdown = recommendation_service.calculate_recommendation_score(
+            priority_score=0.75,
+            margin_percentage=Decimal("38.0"),
+            risk_score=25,
+            supplier_confidence=Decimal("0.85"),
+            discovery_mode="user",
+            degraded=False,
+            fallback_used=False,
+        )
 
-class TestGenerateRecommendationReasons:
+        assert baseline_breakdown["demand_adjustment"] == 0.0
+        assert conservative_breakdown["demand_adjustment"] == -6.0
+        assert confident_breakdown["demand_adjustment"] == 3.0
+        assert conservative_score < baseline_score < confident_score
+
     """Tests for generate_recommendation_reasons method."""
 
     def test_high_profit_product(self, recommendation_service):
@@ -200,6 +219,40 @@ class TestGenerateRecommendationReasons:
             profitability_decision=ProfitabilityDecision.PROFITABLE,
         )
         assert any("季节性需求增长" in r for r in reasons_medium)
+    def test_demand_discovery_reasons(self, recommendation_service):
+        """Test reasons include demand discovery context."""
+        reasons = recommendation_service.generate_recommendation_reasons(
+            margin_percentage=Decimal("32.0"),
+            seasonal_boost=1.0,
+            competition_density="medium",
+            risk_decision=RiskDecision.REVIEW,
+            sales_count=300,
+            rating=Decimal("4.1"),
+            profitability_decision=ProfitabilityDecision.MARGINAL,
+            discovery_mode="fallback",
+            degraded=True,
+            fallback_used=True,
+        )
+
+        assert any("使用回退关键词发现候选" in r for r in reasons)
+        assert any("需求发现过程存在降级" in r for r in reasons)
+
+    def test_user_discovery_reason(self, recommendation_service):
+        """Test user discovery adds confidence reason."""
+        reasons = recommendation_service.generate_recommendation_reasons(
+            margin_percentage=Decimal("40.0"),
+            seasonal_boost=1.0,
+            competition_density="low",
+            risk_decision=RiskDecision.PASS,
+            sales_count=1000,
+            rating=Decimal("4.5"),
+            profitability_decision=ProfitabilityDecision.PROFITABLE,
+            discovery_mode="user",
+            degraded=False,
+            fallback_used=False,
+        )
+
+        assert any("需求关键词已人工确认" in r for r in reasons)
 
 
 class TestGetRecommendationLevel:

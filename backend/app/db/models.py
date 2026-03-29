@@ -24,14 +24,24 @@ from app.core.enums import (
     AgentRunStatus,
     AssetType,
     CandidateStatus,
+    ContentUsageScope,
     ExperimentStatus,
     FeedbackAction,
+    InboundShipmentStatus,
+    InventoryMode,
+    InventoryMovementType,
+    InventoryReservationStatus,
+    LocalizationType,
     PlatformListingStatus,
     ProductLifecycle,
+    ProductMasterStatus,
+    ProductVariantStatus,
     ProfitabilityDecision,
+    PurchaseOrderStatus,
     RiskDecision,
     SourcePlatform,
     StrategyRunStatus,
+    SupplierStatus,
     TargetPlatform,
     TriggerType,
 )
@@ -303,6 +313,7 @@ class ContentAsset(Base, UpdateTimestampMixin):
     - 支持多风格、多平台、多地区标签
     - AI质量评分和人工审核
     - 版本控制和使用统计
+    - 支持基础素材、平台派生素材和本地化素材
     """
 
     __tablename__ = "content_assets"
@@ -310,6 +321,9 @@ class ContentAsset(Base, UpdateTimestampMixin):
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
     candidate_product_id: Mapped[UUID] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("candidate_products.id"), nullable=False, index=True
+    )
+    product_variant_id: Mapped[Optional[UUID]] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("product_variants.id"), index=True
     )
 
     # 资产类型
@@ -321,6 +335,11 @@ class ContentAsset(Base, UpdateTimestampMixin):
     style_tags: Mapped[Optional[list[str]]] = mapped_column(ARRAY(String(50)))  # ["minimalist", "luxury", "cute"]
     platform_tags: Mapped[Optional[list[str]]] = mapped_column(ARRAY(String(50)))  # ["temu", "amazon", "ozon"]
     region_tags: Mapped[Optional[list[str]]] = mapped_column(ARRAY(String(10)))  # ["us", "eu", "ru"]
+    language_tags: Mapped[Optional[list[str]]] = mapped_column(ARRAY(String(10)))  # ["en", "zh", "ja"]
+    compliance_tags: Mapped[Optional[list[str]]] = mapped_column(ARRAY(String(50)))  # ["amazon_compliant"]
+    usage_scope: Mapped[Optional[ContentUsageScope]] = mapped_column(
+        SAEnum(ContentUsageScope, native_enum=False), index=True
+    )
     variant_group: Mapped[Optional[str]] = mapped_column(String(100), index=True)
 
     # 文件信息
@@ -328,6 +347,7 @@ class ContentAsset(Base, UpdateTimestampMixin):
     file_size: Mapped[Optional[int]] = mapped_column(Integer)  # bytes
     dimensions: Mapped[Optional[str]] = mapped_column(String(20))  # "1024x1024"
     format: Mapped[Optional[str]] = mapped_column(String(10))  # "png", "jpg", "mp4"
+    spec: Mapped[Optional[dict]] = mapped_column(JSON)  # {"width": 800, "height": 800, "format": "jpg", "has_text": false}
 
     # 质量评分
     ai_quality_score: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(3, 1))  # 0.0-10.0
@@ -344,7 +364,7 @@ class ContentAsset(Base, UpdateTimestampMixin):
     # 版本控制
     version: Mapped[int] = mapped_column(Integer, default=1)
     parent_asset_id: Mapped[Optional[UUID]] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("content_assets.id")
+        PGUUID(as_uuid=True), ForeignKey("content_assets.id"), index=True
     )  # 衍生自哪个资产
 
     # 生成参数（用于复现）
@@ -352,11 +372,12 @@ class ContentAsset(Base, UpdateTimestampMixin):
 
     # Relationships
     candidate: Mapped["CandidateProduct"] = relationship(back_populates="content_assets")
+    product_variant: Mapped[Optional["ProductVariant"]] = relationship()
     parent_asset: Mapped[Optional["ContentAsset"]] = relationship(
         remote_side=[id], back_populates="derived_assets"
     )
     derived_assets: Mapped[list["ContentAsset"]] = relationship(
-        back_populates="parent_asset", remote_side=[parent_asset_id]
+        back_populates="parent_asset",
     )
     platform_listings: Mapped[list["PlatformListing"]] = relationship(
         secondary="listing_asset_associations", back_populates="assets"
@@ -364,6 +385,68 @@ class ContentAsset(Base, UpdateTimestampMixin):
     performance_daily: Mapped[list["AssetPerformanceDaily"]] = relationship(
         back_populates="asset", passive_deletes=True
     )
+
+
+class LocalizationContent(Base, UpdateTimestampMixin):
+    """Localization content for product variants."""
+
+    __tablename__ = "localization_contents"
+    __table_args__ = (
+        Index("idx_localization_variant_language", "variant_id", "language", "content_type"),
+        Index("uq_localization_variant_language_type", "variant_id", "language", "content_type", unique=True),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    variant_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("product_variants.id"), nullable=False, index=True
+    )
+
+    # Localization details
+    language: Mapped[str] = mapped_column(String(10), nullable=False)
+    content_type: Mapped[LocalizationType] = mapped_column(
+        SAEnum(LocalizationType, native_enum=False), nullable=False
+    )
+    content: Mapped[dict] = mapped_column(JSON, nullable=False)
+
+    # Platform targeting (optional)
+    platform_tags: Mapped[Optional[list[str]]] = mapped_column(ARRAY(String(50)))
+    region_tags: Mapped[Optional[list[str]]] = mapped_column(ARRAY(String(10)))
+
+    # Quality metadata
+    quality_score: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(3, 2))
+    generated_by: Mapped[Optional[str]] = mapped_column(String(50))
+    reviewed: Mapped[bool] = mapped_column(default=False)
+
+    # Relationships
+    variant: Mapped["ProductVariant"] = relationship()
+
+
+class PlatformContentRule(Base, UpdateTimestampMixin):
+    """Platform-specific content rules."""
+
+    __tablename__ = "platform_content_rules"
+    __table_args__ = (
+        Index("uq_platform_content_rule", "platform", "asset_type", unique=True),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    platform: Mapped[TargetPlatform] = mapped_column(
+        SAEnum(TargetPlatform, native_enum=False), nullable=False, index=True
+    )
+    asset_type: Mapped[AssetType] = mapped_column(
+        SAEnum(AssetType, native_enum=False), nullable=False
+    )
+
+    # Image specifications
+    image_spec: Mapped[dict] = mapped_column(JSON, nullable=False)
+
+    # Content rules
+    allow_text_on_image: Mapped[bool] = mapped_column(default=False)
+    max_images: Mapped[int] = mapped_column(Integer, nullable=False)
+    required_languages: Mapped[list[str]] = mapped_column(ARRAY(String(10)), nullable=False)
+
+    # Compliance tags
+    compliance_requirements: Mapped[Optional[dict]] = mapped_column(JSON)
 
 
 class PlatformListing(Base, UpdateTimestampMixin):
@@ -381,6 +464,12 @@ class PlatformListing(Base, UpdateTimestampMixin):
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
     candidate_product_id: Mapped[UUID] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("candidate_products.id"), nullable=False, index=True
+    )
+    product_variant_id: Mapped[Optional[UUID]] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("product_variants.id"), index=True
+    )
+    inventory_mode: Mapped[Optional[InventoryMode]] = mapped_column(
+        SAEnum(InventoryMode, native_enum=False), index=True
     )
 
     # 平台信息
@@ -428,6 +517,7 @@ class PlatformListing(Base, UpdateTimestampMixin):
 
     # Relationships
     candidate: Mapped["CandidateProduct"] = relationship(back_populates="platform_listings")
+    product_variant: Mapped[Optional["ProductVariant"]] = relationship()
     assets: Mapped[list["ContentAsset"]] = relationship(
         secondary="listing_asset_associations", back_populates="platform_listings"
     )
@@ -606,3 +696,280 @@ class PriceHistory(Base):
 
     # Relationships
     listing: Mapped["PlatformListing"] = relationship(back_populates="price_history")
+
+
+# ============================================================================
+# ERP Lite: Procurement & Inventory Management
+# ============================================================================
+
+
+class ProductMaster(Base, UpdateTimestampMixin):
+    """Product master record (SKU parent)."""
+
+    __tablename__ = "product_masters"
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    candidate_product_id: Mapped[Optional[UUID]] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("candidate_products.id"), index=True
+    )
+
+    # Product identification
+    internal_sku: Mapped[str] = mapped_column(String(50), unique=True, index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    category: Mapped[Optional[str]] = mapped_column(String(100))
+    description: Mapped[Optional[str]] = mapped_column(Text)
+
+    # Status
+    status: Mapped[str] = mapped_column(
+        SAEnum(ProductMasterStatus, native_enum=False), nullable=False, default=ProductMasterStatus.DRAFT
+    )
+
+    # Relationships
+    candidate: Mapped[Optional["CandidateProduct"]] = relationship()
+    variants: Mapped[list["ProductVariant"]] = relationship(back_populates="master", cascade="all, delete-orphan")
+
+
+class ProductVariant(Base, UpdateTimestampMixin):
+    """Product variant (SKU with specific attributes)."""
+
+    __tablename__ = "product_variants"
+    __table_args__ = (Index("uq_variant_sku", "master_id", "variant_sku", unique=True),)
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    master_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("product_masters.id"), nullable=False, index=True
+    )
+
+    # Variant identification
+    variant_sku: Mapped[str] = mapped_column(String(50), nullable=False)  # e.g., "SKU-001-RED-M"
+    attributes: Mapped[Optional[dict]] = mapped_column(JSON)  # {"color": "red", "size": "M"}
+
+    # Inventory mode
+    inventory_mode: Mapped[str] = mapped_column(
+        SAEnum(InventoryMode, native_enum=False), nullable=False, default=InventoryMode.STOCK_FIRST
+    )
+
+    # Status
+    status: Mapped[str] = mapped_column(
+        SAEnum(ProductVariantStatus, native_enum=False), nullable=False, default=ProductVariantStatus.DRAFT
+    )
+
+    # Relationships
+    master: Mapped["ProductMaster"] = relationship(back_populates="variants")
+    inventory_level: Mapped[Optional["InventoryLevel"]] = relationship(back_populates="variant", cascade="all, delete-orphan")
+    purchase_order_items: Mapped[list["PurchaseOrderItem"]] = relationship(back_populates="variant")
+
+
+class Supplier(Base, UpdateTimestampMixin):
+    """Supplier master record."""
+
+    __tablename__ = "suppliers"
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+
+    # Supplier identification
+    name: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
+    alibaba_id: Mapped[Optional[str]] = mapped_column(String(100), index=True)
+    contact_email: Mapped[Optional[str]] = mapped_column(String(255))
+    contact_phone: Mapped[Optional[str]] = mapped_column(String(20))
+
+    # Status
+    status: Mapped[str] = mapped_column(
+        SAEnum(SupplierStatus, native_enum=False), nullable=False, default=SupplierStatus.ACTIVE
+    )
+
+    # Metadata
+    metadata_: Mapped[Optional[dict]] = mapped_column("metadata", JSON)
+
+    # Relationships
+    offers: Mapped[list["SupplierOffer"]] = relationship(back_populates="supplier", cascade="all, delete-orphan")
+    purchase_orders: Mapped[list["PurchaseOrder"]] = relationship(back_populates="supplier")
+
+
+class SupplierOffer(Base, UpdateTimestampMixin):
+    """Supplier offer for a product variant."""
+
+    __tablename__ = "supplier_offers"
+    __table_args__ = (Index("uq_supplier_offer", "supplier_id", "variant_id", unique=True),)
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    supplier_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("suppliers.id"), nullable=False, index=True
+    )
+    variant_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("product_variants.id"), nullable=False, index=True
+    )
+
+    # Pricing
+    unit_price: Mapped[Decimal] = mapped_column(DECIMAL(10, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="USD")
+
+    # Terms
+    moq: Mapped[int] = mapped_column(Integer, nullable=False, default=1)  # Minimum order quantity
+    lead_time_days: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
+
+    # Relationships
+    supplier: Mapped["Supplier"] = relationship(back_populates="offers")
+    variant: Mapped["ProductVariant"] = relationship()
+
+
+class PurchaseOrder(Base, UpdateTimestampMixin):
+    """Purchase order to supplier."""
+
+    __tablename__ = "purchase_orders"
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    po_number: Mapped[str] = mapped_column(String(50), unique=True, index=True, nullable=False)
+    supplier_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("suppliers.id"), nullable=False, index=True
+    )
+
+    # Status
+    status: Mapped[str] = mapped_column(
+        SAEnum(PurchaseOrderStatus, native_enum=False), nullable=False, default=PurchaseOrderStatus.DRAFT
+    )
+
+    # Dates
+    order_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    expected_delivery_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    actual_delivery_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+    # Totals
+    total_amount: Mapped[Optional[Decimal]] = mapped_column(DECIMAL(12, 2))
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="USD")
+
+    # Notes
+    notes: Mapped[Optional[str]] = mapped_column(Text)
+
+    # Relationships
+    supplier: Mapped["Supplier"] = relationship(back_populates="purchase_orders")
+    items: Mapped[list["PurchaseOrderItem"]] = relationship(back_populates="purchase_order", cascade="all, delete-orphan")
+    inbound_shipments: Mapped[list["InboundShipment"]] = relationship(back_populates="purchase_order")
+
+
+class PurchaseOrderItem(Base):
+    """Line item in a purchase order."""
+
+    __tablename__ = "purchase_order_items"
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    purchase_order_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("purchase_orders.id"), nullable=False, index=True
+    )
+    variant_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("product_variants.id"), nullable=False, index=True
+    )
+
+    # Quantity and pricing
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    unit_price: Mapped[Decimal] = mapped_column(DECIMAL(10, 2), nullable=False)
+    line_total: Mapped[Decimal] = mapped_column(DECIMAL(12, 2), nullable=False)
+
+    # Relationships
+    purchase_order: Mapped["PurchaseOrder"] = relationship(back_populates="items")
+    variant: Mapped["ProductVariant"] = relationship(back_populates="purchase_order_items")
+
+
+class InboundShipment(Base, UpdateTimestampMixin):
+    """Inbound shipment from supplier."""
+
+    __tablename__ = "inbound_shipments"
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    purchase_order_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("purchase_orders.id"), nullable=False, index=True
+    )
+
+    # Shipment identification
+    tracking_number: Mapped[Optional[str]] = mapped_column(String(100), index=True)
+    shipment_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    expected_arrival_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    actual_arrival_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+    # Status
+    status: Mapped[str] = mapped_column(
+        SAEnum(InboundShipmentStatus, native_enum=False), nullable=False, default=InboundShipmentStatus.PENDING
+    )
+
+    # Relationships
+    purchase_order: Mapped["PurchaseOrder"] = relationship(back_populates="inbound_shipments")
+    movements: Mapped[list["InventoryMovement"]] = relationship(back_populates="inbound_shipment")
+
+
+class InventoryLevel(Base, UpdateTimestampMixin):
+    """Current inventory level for a product variant."""
+
+    __tablename__ = "inventory_levels"
+    __table_args__ = (Index("uq_inventory_level", "variant_id", unique=True),)
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    variant_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("product_variants.id"), nullable=False, unique=True, index=True
+    )
+
+    # Quantities
+    available_quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    reserved_quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    damaged_quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    # Relationships
+    variant: Mapped["ProductVariant"] = relationship(back_populates="inventory_level")
+
+
+class InventoryReservation(Base, UpdateTimestampMixin):
+    """Inventory reservation for pre-order mode."""
+
+    __tablename__ = "inventory_reservations"
+    __table_args__ = (
+        Index("idx_inventory_reservations_reference", "reference_type", "reference_id"),
+        Index("idx_inventory_reservations_status", "status"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    variant_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("product_variants.id"), nullable=False, index=True
+    )
+
+    # Reservation details
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    reference_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    reference_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(
+        SAEnum(InventoryReservationStatus, native_enum=False),
+        nullable=False,
+        default=InventoryReservationStatus.ACTIVE,
+    )
+
+    # Timestamps
+    reserved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    fulfilled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    cancelled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    notes: Mapped[Optional[str]] = mapped_column(Text)
+
+    # Relationships
+    variant: Mapped["ProductVariant"] = relationship()
+
+
+class InventoryMovement(Base, TimestampMixin):
+    """Audit trail for inventory movements."""
+
+    __tablename__ = "inventory_movements"
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    variant_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("product_variants.id"), nullable=False, index=True
+    )
+    inbound_shipment_id: Mapped[Optional[UUID]] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("inbound_shipments.id"), index=True
+    )
+
+    # Movement details
+    movement_type: Mapped[str] = mapped_column(
+        SAEnum(InventoryMovementType, native_enum=False), nullable=False
+    )
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    reference_id: Mapped[Optional[str]] = mapped_column(String(100))  # PO number, shipment ID, etc.
+    notes: Mapped[Optional[str]] = mapped_column(Text)
+
+    # Relationships
+    inbound_shipment: Mapped[Optional["InboundShipment"]] = relationship(back_populates="movements")

@@ -2,9 +2,9 @@
 
 > 目标：为产品、研发、测试和管理协作提供统一入口，串联产品路线图、研发路线图、Stage 1-6 实施任务清单与执行版 backlog。
 >
-> 版本: v1.2
+> 版本: v1.3
 > 创建时间: 2026-03-25
-> 更新时间: 2026-03-25
+> 更新时间: 2026-03-29
 
 ---
 
@@ -21,6 +21,11 @@
    - `docs/roadmap/engineering-roadmap-2026.md`
    - 面向对象：研发、架构、数据、测试
    - 关注重点：当前代码基线、架构原则、阶段交付、实体演进、服务边界
+
+3. **双模式经营架构实施计划**
+   - `docs/roadmap/dual-mode-operations-plan.md`
+   - 面向对象：研发、架构、产品
+   - 关注重点：Temu `pre_order` / 传统 `stock_first` 双模式、自研 ERP Lite 内核、素材与本地化策略
 
 ### 分阶段实施清单
 
@@ -77,6 +82,14 @@
 ---
 
 ## 2. 项目总览摘要
+
+### 当前定位
+
+Deyes 当前的已实现基础是：
+- 需求验证优先的候选发现与排序链路
+- 定价、风控、推荐排序三层的需求上下文集成
+- 推荐服务降级为内部决策引擎
+- 自动化经营控制平面的路线图与分阶段 backlog 已完整拆解
 
 ### 当前文档资产
 
@@ -179,12 +192,13 @@ Candidate → SKU → Listing → Order → Profit → Feedback → Automated Ac
 
 建议按以下顺序阅读：
 1. `engineering-roadmap-2026.md`
-2. 本文档
-3. `stage1-development-backlog.md`
-4. `stage2-development-backlog.md`
-5. `stage3-development-backlog.md`
-6. `stage4-development-backlog.md`
-7. 需要看阶段原始范围时，再回看对应 implementation tasks 文档
+2. `dual-mode-operations-plan.md`
+3. 本文档
+4. `stage1-development-backlog.md`
+5. `stage2-development-backlog.md`
+6. `stage3-development-backlog.md`
+7. `stage4-development-backlog.md`
+8. 需要看阶段原始范围时，再回看对应 implementation tasks 文档
 
 ### 面向项目启动会 / 排期会
 
@@ -401,7 +415,7 @@ Stage 6 自动化经营控制平面
 
 ---
 
-**文档版本**: v1.2
+**文档版本**: v1.3
 **创建时间**: 2026-03-25
-**更新时间**: 2026-03-25
+**更新时间**: 2026-03-29
 **维护者**: Deyes 研发团队

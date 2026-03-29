@@ -2,7 +2,7 @@
 
 ## 概述
 
-本文档详细说明 Deyes 系统中供应商评分算法的数学公式��权重配置。
+本文档详细说明 Deyes 系统中供应商评分算法的数学公式与权重配置。
 
 **位置：** `backend/app/services/pricing_service.py:17`
 

@@ -77,6 +77,7 @@ async def list_recommendations(
         pricing = candidate.pricing_assessment
         risk = candidate.risk_assessment
         normalized_attrs = candidate.normalized_attributes or {}
+        demand_metadata = candidate.demand_discovery_metadata or {}
 
         # Get best supplier confidence
         supplier_confidence = None
@@ -95,6 +96,9 @@ async def list_recommendations(
             margin_percentage=pricing.margin_percentage if pricing else None,
             risk_score=risk.score if risk else None,
             supplier_confidence=supplier_confidence,
+            discovery_mode=demand_metadata.get("discovery_mode"),
+            degraded=bool(demand_metadata.get("degraded", False)),
+            fallback_used=bool(demand_metadata.get("fallback_used", False)),
         )
 
         # Filter by min_score
@@ -110,6 +114,9 @@ async def list_recommendations(
             sales_count=candidate.sales_count,
             rating=candidate.rating,
             profitability_decision=pricing.profitability_decision if pricing else None,
+            discovery_mode=demand_metadata.get("discovery_mode"),
+            degraded=bool(demand_metadata.get("degraded", False)),
+            fallback_used=bool(demand_metadata.get("fallback_used", False)),
         )
 
         # Get recommendation level
@@ -187,6 +194,7 @@ async def get_candidate_recommendation(
     pricing = candidate.pricing_assessment
     risk = candidate.risk_assessment
     normalized_attrs = candidate.normalized_attributes or {}
+    demand_metadata = candidate.demand_discovery_metadata or {}
 
     # Get best supplier confidence
     supplier_confidence = None
@@ -206,6 +214,9 @@ async def get_candidate_recommendation(
         margin_percentage=pricing.margin_percentage if pricing else None,
         risk_score=risk.score if risk else None,
         supplier_confidence=supplier_confidence,
+        discovery_mode=demand_metadata.get("discovery_mode"),
+        degraded=bool(demand_metadata.get("degraded", False)),
+        fallback_used=bool(demand_metadata.get("fallback_used", False)),
     )
 
     # Generate recommendation reasons
@@ -217,6 +228,9 @@ async def get_candidate_recommendation(
         sales_count=candidate.sales_count,
         rating=candidate.rating,
         profitability_decision=pricing.profitability_decision if pricing else None,
+        discovery_mode=demand_metadata.get("discovery_mode"),
+        degraded=bool(demand_metadata.get("degraded", False)),
+        fallback_used=bool(demand_metadata.get("fallback_used", False)),
     )
 
     # Get recommendation level
@@ -299,6 +313,7 @@ async def create_recommendation_feedback(
     pricing = candidate.pricing_assessment
     risk = candidate.risk_assessment
     normalized_attrs = candidate.normalized_attributes or {}
+    demand_metadata = candidate.demand_discovery_metadata or {}
 
     supplier_confidence = None
     if candidate.supplier_matches:
@@ -315,6 +330,9 @@ async def create_recommendation_feedback(
         margin_percentage=pricing.margin_percentage if pricing else None,
         risk_score=risk.score if risk else None,
         supplier_confidence=supplier_confidence,
+        discovery_mode=demand_metadata.get("discovery_mode"),
+        degraded=bool(demand_metadata.get("degraded", False)),
+        fallback_used=bool(demand_metadata.get("fallback_used", False)),
     )
     level = recommendation_service.get_recommendation_level(score)
 
@@ -383,6 +401,7 @@ async def get_recommendation_trends(
         pricing = candidate.pricing_assessment
         risk = candidate.risk_assessment
         normalized_attrs = candidate.normalized_attributes or {}
+        demand_metadata = candidate.demand_discovery_metadata or {}
 
         # Get best supplier confidence
         supplier_confidence = None
@@ -401,6 +420,9 @@ async def get_recommendation_trends(
             margin_percentage=pricing.margin_percentage if pricing else None,
             risk_score=risk.score if risk else None,
             supplier_confidence=supplier_confidence,
+            discovery_mode=demand_metadata.get("discovery_mode"),
+            degraded=bool(demand_metadata.get("degraded", False)),
+            fallback_used=bool(demand_metadata.get("fallback_used", False)),
         )
 
         # Filter by min_score
@@ -479,6 +501,7 @@ async def get_recommendations_by_platform(
         pricing = candidate.pricing_assessment
         risk = candidate.risk_assessment
         normalized_attrs = candidate.normalized_attributes or {}
+        demand_metadata = candidate.demand_discovery_metadata or {}
 
         # Get best supplier confidence
         supplier_confidence = None
@@ -497,6 +520,9 @@ async def get_recommendations_by_platform(
             margin_percentage=pricing.margin_percentage if pricing else None,
             risk_score=risk.score if risk else None,
             supplier_confidence=supplier_confidence,
+            discovery_mode=demand_metadata.get("discovery_mode"),
+            degraded=bool(demand_metadata.get("degraded", False)),
+            fallback_used=bool(demand_metadata.get("fallback_used", False)),
         )
 
         # Filter by min_score
@@ -627,6 +653,7 @@ async def get_recommendation_stats(
         pricing = candidate.pricing_assessment
         risk = candidate.risk_assessment
         normalized_attrs = candidate.normalized_attributes or {}
+        demand_metadata = candidate.demand_discovery_metadata or {}
 
         # Get best supplier confidence
         supplier_confidence = None
@@ -645,6 +672,9 @@ async def get_recommendation_stats(
             margin_percentage=pricing.margin_percentage if pricing else None,
             risk_score=risk.score if risk else None,
             supplier_confidence=supplier_confidence,
+            discovery_mode=demand_metadata.get("discovery_mode"),
+            degraded=bool(demand_metadata.get("degraded", False)),
+            fallback_used=bool(demand_metadata.get("fallback_used", False)),
         )
 
         # Filter by min_score

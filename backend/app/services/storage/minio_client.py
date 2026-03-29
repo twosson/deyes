@@ -2,6 +2,7 @@
 
 Provides functionality for:
 - Uploading images/videos to MinIO
+- Downloading image bytes from MinIO or HTTP URLs
 - Generating presigned URLs for access
 - Organizing assets by product/platform
 - Content type detection
@@ -343,6 +344,63 @@ class MinIOClient:
         except S3Error as e:
             self.logger.error("copy_failed", error=str(e), source=source_object_name)
             raise
+
+    async def download_image(self, file_url: str) -> bytes:
+        """Download image bytes from MinIO or HTTP URL.
+
+        Args:
+            file_url: MinIO URL (e.g., "http://localhost:9000/bucket/path")
+                     or HTTP URL (e.g., "https://example.com/image.jpg")
+
+        Returns:
+            Image bytes
+
+        Raises:
+            S3Error: If MinIO download fails
+            httpx.HTTPError: If HTTP download fails
+        """
+        # Check if it's a MinIO URL
+        if self.bucket_name in file_url:
+            # Parse MinIO URL
+            object_name = self.parse_object_name_from_url(file_url)
+            if not object_name:
+                raise ValueError(f"Cannot parse MinIO object name from URL: {file_url}")
+
+            try:
+                # Download from MinIO
+                response = self.client.get_object(self.bucket_name, object_name)
+                image_bytes = response.read()
+                response.close()
+                response.release_conn()
+
+                self.logger.info(
+                    "image_downloaded_from_minio",
+                    object_name=object_name,
+                    size=len(image_bytes),
+                )
+                return image_bytes
+
+            except S3Error as e:
+                self.logger.error("minio_download_failed", error=str(e), object_name=object_name)
+                raise
+
+        else:
+            # Download from HTTP URL
+            try:
+                async with httpx.AsyncClient(timeout=30) as client:
+                    response = await client.get(file_url)
+                    response.raise_for_status()
+
+                    self.logger.info(
+                        "image_downloaded_from_http",
+                        url=file_url,
+                        size=len(response.content),
+                    )
+                    return response.content
+
+            except httpx.HTTPError as e:
+                self.logger.error("http_download_failed", error=str(e), url=file_url)
+                raise
 
 
 # Singleton instance

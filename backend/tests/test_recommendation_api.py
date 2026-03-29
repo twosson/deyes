@@ -36,6 +36,7 @@ async def _create_test_candidate(
     priority_score: float = 0.7,
     seasonal_boost: float = 1.2,
     competition_density: str = "low",
+    demand_discovery_metadata: dict = None,
 ) -> CandidateProduct:
     """Create a test candidate with all relationships."""
     # Create strategy run
@@ -67,6 +68,7 @@ async def _create_test_candidate(
             "seasonal_boost": seasonal_boost,
             "competition_density": competition_density,
         },
+        demand_discovery_metadata=demand_discovery_metadata,
     )
     db_session.add(candidate)
     await db_session.flush()
@@ -336,6 +338,46 @@ async def test_get_candidate_recommendation(db_session):
             # Check best supplier
             assert "best_supplier" in data
             assert data["best_supplier"]["confidence_score"] == 0.88
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_get_candidate_recommendation_includes_demand_discovery_reasons(db_session):
+    """Test recommendation details include demand discovery reasons."""
+    async def override_get_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_get_db
+
+    try:
+        candidate = await _create_test_candidate(
+            db_session,
+            title="Demand Context Product",
+            priority_score=0.75,
+            sales_count=2000,
+            rating=Decimal("4.6"),
+            demand_discovery_metadata={
+                "discovery_mode": "fallback",
+                "degraded": True,
+                "fallback_used": True,
+            },
+        )
+        await _add_pricing_assessment(db_session, candidate.id, margin_percentage=Decimal("38.0"))
+        await _add_risk_assessment(db_session, candidate.id, score=25)
+        await _add_supplier_match(db_session, candidate.id, confidence_score=Decimal("0.88"))
+
+        await db_session.commit()
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get(f"/api/v1/candidates/{candidate.id}/recommendation")
+            assert response.status_code == 200
+
+            data = response.json()
+            reasons = data["recommendation"]["reasons"]
+            assert any("使用回退关键词发现候选" in r for r in reasons)
+            assert any("需求发现过程存在降级" in r for r in reasons)
     finally:
         app.dependency_overrides.clear()
 

@@ -54,7 +54,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **[Agent定义](docs/agents/agent-definitions.md)** - 24个数字员工岗位定义
 - **[核心业务流程](docs/workflows/core-business-flows.md)** - 业务流程设计
-- **[推荐服务文档](docs/services/recommendation-service.md)** - 推荐评分算法、API 使用
+- **[推荐服务文档](docs/services/recommendation-service.md)** - 内部推荐排序服务、评分算法与需求上下文集成
 
 ### 📅 路线图文档
 
@@ -210,91 +210,62 @@ LangGraph + CrewAI + n8n + Celery
 
 ## 产品选品策略
 
-### 当前方法（爬虫优先）
+### 当前架构（需求验证优先）
 
-**流程：** 平台抓取 → 1688 匹配 → 利润计算 → 风控评估
+**详见：** `docs/architecture/product-selection-optimization-v1.md`
+
+**核心流程：** 需求验证 → 平台抓取 → 1688 匹配 → 定价计算 → 风险评估 → 推荐排序
 
 **位置：** `backend/app/agents/product_selector.py:26`
 
-```python
-# 1. 抓取平台商品（Temu, Amazon, AliExpress）
-products = await source_adapter.fetch_products(...)
-
-# 2. 为每个商品匹配 1688 供应商（多路召回）
-suppliers = await supplier_matcher.find_suppliers(...)
-
-# 3. 计算利润率
-margin_ratio = (platform_price - total_cost) / platform_price
-
-# 4. 风控评估
-risk_score = assess_compliance_risk(candidate)
-```
-
-**优势：**
-- 1688 多路召回（默认、销量、工厂、图像相似）
-- 供应商竞争集评分（多维度加权）
-- 历史反馈先验（种子、店铺、供应商）
-- 闭环优化（90 天回溯）
-
-**缺陷：**
-- 先抓商品，再验证需求（浪费资源）
-- 无竞争密度评估（红海产品占 60%）
-- 缺少 1688 跨境信号（热卖榜、复购率、发货周期）
-- 无季节性日历（错过节假日机会）
-- 利润阈值偏低（30% 在 2026 年可能不够）
-
-### 计划改进（需求优先）
-
-**详见：** `docs/architecture/product-selection-optimization-v1.md:1`
-
-**核心变化：**
-1. **需求验证层（P0）** - 抓取前先验证海外需求 ✅ **已完成**
+**已完成功能：**
+1. **需求验证层** ✅
    - Google Trends 搜索量验证（>500/月）
+   - Helium 10 API 集成（可选增强，自动回退）
    - 竞争密度评估（<5000 搜索结果）
-   - 1688 跨境信号提取（热卖榜、复购率、发货周期）
+   - 趋势方向分类（rising/stable/declining）
+   - Redis 缓存（24h TTL）
    - 位置：`backend/app/services/demand_validator.py`
 
-2. **提高利润阈值（P0）** - 立即执行 ✅ **已完成**
-   - 基础阈值：30% → 35%
+2. **动态利润阈值** ✅
+   - 基础阈值：35%
    - 平台特定：Amazon 40%, Temu 30%, AliExpress 35%
    - 品类特定：Electronics 25%, Jewelry 50%, Home 35%
    - 位置：`backend/app/services/pricing_service.py`
 
-3. **竞争密度风险评估（P0）** - 风控层增强 ✅ **已完成**
+3. **竞争密度与需求质量风控** ✅
    - 竞争密度评分：高=80, 中=50, 低=20
+   - 需求发现质量评分：user=0, generated=10, fallback=25, none=40
    - 组合风险评分：合规风险 * 0.6 + 竞争风险 * 0.4
    - 位置：`backend/app/services/risk_rules.py`
 
-4. **动态关键词生成（P1）** - 自动发现趋势 ✅ **已完成**
+4. **动态关键词生成** ✅
    - 每晚生成 top 50 趋势关键词（23:00 UTC）
    - 扩展到 200+ 长尾关键词
    - Redis 缓存（24h TTL）
    - 位置：`backend/app/services/keyword_generator.py`
    - 定时任务：`backend/app/workers/tasks_keyword_research.py`
 
-5. **季节性日历（P1）** - 事件驱动选品 ✅ **已完成**
+5. **季节性日历** ✅
    - 90 天前瞻日历
    - 11 个年度事件（情人节、Prime Day、黑五、圣诞等）
    - 品类特定加权（情人节珠宝 +50%，黑五电子 +60%）
    - 自动优先级调整
    - 位置：`backend/app/core/seasonal_calendar.py`
-   - 品类特定：Electronics 25%, Jewelry 50%, Home 35%
 
-3. **动态关键词生成（P1）** - 自动发现趋势
-   - 每晚生成 top 50 趋势关键词
-   - 扩展到 200+ 长尾关键词
-   - 自动触发选品任务
+6. **需求上下文集成** ✅（2026-03-29）
+   - 定价服务已纳入需求发现上下文
+   - 风控规则已纳入需求发现质量风险
+   - 推荐排序已纳入需求上下文加减分（-6 至 +3）
+   - 推荐理由已输出需求发现来源与降级信息
 
-4. **季节性日历（P1）** - 事件驱动选品
-   - 90 天前瞻日历
-   - 品类特定加权（情人节珠宝 +50%）
-   - 自动优先级调整
-
-**预期影响：**
-- 候选质量：+40%
-- 平均利润率：32% → 38%
-- 红海产品：60% → 20%
-- 人工筛选工作量：-70%
+**核心优势：**
+- 需求验证优先，避免无效抓取与搜索
+- 1688 多路召回（默认、销量、工厂、图像相似）
+- 供应商竞争集评分（多维度加权）
+- 历史反馈先验（种子、店铺、供应商）
+- 闭环优化（90 天回溯）
+- 需求发现质量全流程追踪
 
 ### 关键服务
 
@@ -441,6 +412,6 @@ A:
 
 ---
 
-**最后更新**: 2026-03-20
+**最后更新**: 2026-03-29
 **架构版本**: v4.0
 **文档状态**: 生产就绪

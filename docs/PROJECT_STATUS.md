@@ -2,7 +2,7 @@
 
 **最后更新**: 2026-03-29
 **架构版本**: v4.0
-**项目阶段**: 需求优先选品架构 + 自动化经营方向
+**项目阶段**: Phase 0-2 完成，Phase 3-6 待实施
 
 ---
 
@@ -22,7 +22,23 @@
 
 ## 二、最新交付（2026-03-29）
 
-### Phase 1 ERP Lite 核心实现完成
+### Phase 0 业务规则矩阵完成 ✅
+
+**产出文档**：
+- ✅ 平台经营模式矩阵（`docs/business-rules/platform-mode-matrix.md`）
+- ✅ 平台内容规则矩阵（`docs/business-rules/platform-content-rules.md`）
+- ✅ SKU 激活规则（`docs/business-rules/sku-activation-rules.md`）
+
+**核心内容**：
+- PRE_ORDER / STOCK_FIRST 双模式定义
+- 12 个平台的库存阈值与佣金率
+- 主图/详情图规格要求
+- 语言支持矩阵
+- Listing 激活条件判定逻辑
+
+---
+
+### Phase 1 ERP Lite 核心实现完成 ✅
 
 **核心变更**：
 - ✅ ProductMaster / ProductVariant 模型与服务（`backend/app/db/models.py:634-689`）
@@ -57,6 +73,50 @@
 **文档**：
 - `backend/PHASE1_WORKFLOW_INTEGRATION.md` - Phase1 工作流集成总结
 - `docs/roadmap/dual-mode-operations-plan.md` - 双模式经营架构实施计划
+
+---
+
+### Phase 2 素材与本地化体系完成 ✅
+
+**核心变更**：
+- ✅ ContentAsset 扩展（`backend/app/db/models.py:308`）
+  - 新增 `usage_scope` 字段（BASE / PLATFORM_DERIVED / LOCALIZED）
+  - 新增 `language_tags` 字段（多语言标签）
+  - 新增 `spec` 字段（结构化尺寸规格）
+  - 新增 `compliance_tags` 字段（合规标签）
+  - 新增 `product_variant_id` 字段（关联 SKU）
+- ✅ LocalizationContent 模型（`backend/app/db/models.py:390-422`）
+- ✅ PlatformContentRule 模型（`backend/app/db/models.py:424-450`）
+- ✅ LocalizationService - 本地化内容服务（`backend/app/services/localization_service.py`）
+- ✅ PlatformAssetAdapter - 素材验证与选择服务（`backend/app/services/platform_asset_adapter.py`）
+- ✅ TextOverlayService - 文字覆盖服务（`backend/app/services/text_overlay_service.py`）
+- ✅ AssetDerivationService - 素材派生服务（`backend/app/services/asset_derivation_service.py`）
+- ✅ ImageRegenerationService - ComfyUI 图像重生成服务（`backend/app/services/image_regeneration_service.py`）
+- ✅ DirectorWorkflow 集成基础素材生成（`backend/app/agents/director_workflow.py:249`）
+- ✅ PlatformPublisherAgent 集成平台素材选择与按需派生（`backend/app/agents/platform_publisher.py:217`）
+- ✅ 数据库迁移 009_content_asset_extensions, 010_localization_content, 011_platform_content_rule
+
+**影响范围**：
+- 素材现在支持三层体系（BASE → PLATFORM_DERIVED → LOCALIZED）
+- 同一视觉可跨平台复用，按需派生平台特定版本
+- 支持多语言文字覆盖（不重新生成视觉）
+- 支持 ComfyUI 重生成（源图尺寸不足时）
+- 素材派生动作：reuse / resize / convert_format / overlay_localized_text / regenerate
+
+**测试状态**：
+- ✅ LocalizationService 测试（6 个测试用例）
+- ✅ PlatformAssetAdapter 测试（8 个测试用例）
+- ✅ TextOverlayService 测试（4 个测试用例）
+- ✅ AssetDerivationService 测试（7 个测试用例）
+- ✅ ImageRegenerationService 测试（4 个测试用例）
+- ✅ ContentAssetManagerAgent 平台素材生成测试（3 个测试用例）
+- ✅ PlatformPublisherAgent 素材选择测试（3 个测试用例）
+- ✅ DirectorWorkflow 内容集成测试（2 个测试用例）
+
+**文档**：
+- `backend/PHASE2_P2_TEXT_OVERLAY.md` - Phase2 P2 文字覆盖实施总结
+- `backend/PHASE2_P3_COMFYUI_REGENERATION.md` - Phase2 P3 ComfyUI 重生成实施总结
+- `docs/roadmap/dual-mode-operations-plan.md` - 双模式经营架构实施计划（Phase 2 部分）
 
 ---
 
@@ -235,14 +295,22 @@
 
 ### 4.2 内容资产管理
 
-**ContentAsset 模型** - `backend/app/db/models.py:295`
+**ContentAsset 模型** - `backend/app/db/models.py:308`
+- ✅ 三层素材体系（BASE / PLATFORM_DERIVED / LOCALIZED）
+- ✅ 多语言标签支持
+- ✅ 平台标签支持
+- ✅ 合规标签支持
+- ✅ 素材派生与重生成
 - ⏳ 图像质量评分
 - ⏳ 版本控制
 - ⏳ 使用统计
 
 ### 4.3 平台发布
 
-**PlatformListing 模型** - `backend/app/db/models.py:366`
+**PlatformListing 模型** - `backend/app/db/models.py:452`
+- ✅ 关联 product_variant_id（SKU）
+- ✅ 关联 inventory_mode（PRE_ORDER / STOCK_FIRST）
+- ✅ 素材自动选择与按需派生
 - ⏳ Temu/Amazon API 集成
 - ⏳ 库存同步
 - ⏳ 价格同步

@@ -2,7 +2,7 @@
 
 > 目标：为产品、研发、测试和管理协作提供统一入口，串联产品路线图、研发路线图、Stage 1-6 实施任务清单与执行版 backlog。
 >
-> 版本: v1.3
+> 版本: v1.4
 > 创建时间: 2026-03-25
 > 更新时间: 2026-03-29
 
@@ -26,6 +26,24 @@
    - `docs/roadmap/dual-mode-operations-plan.md`
    - 面向对象：研发、架构、产品
    - 关注重点：Temu `pre_order` / 传统 `stock_first` 双模式、自研 ERP Lite 内核、素材与本地化策略
+   - 状态：⚠️ 部分实施中（Phase 0-2 已完成，Phase 3-6 待实施）
+
+### 业务规则矩阵（Phase 0 产出）
+
+1. **平台经营模式矩阵**
+   - `docs/business-rules/platform-mode-matrix.md`
+   - 面向对象：研发、产品、运营
+   - 关注重点：PRE_ORDER / STOCK_FIRST 双模式、平台库存阈值、佣金率、激活规则
+
+2. **平台内容规则矩阵**
+   - `docs/business-rules/platform-content-rules.md`
+   - 面向对象：研发、内容、设计
+   - 关注重点：主图/详情图规格、文字要求、语言支持、素材验证与派生规则
+
+3. **SKU 激活规则**
+   - `docs/business-rules/sku-activation-rules.md`
+   - 面向对象：研发、产品、运营
+   - 关注重点：SKU 生命周期状态、Listing 状态流转、激活条件判定逻辑
 
 ### 分阶段实施清单
 
@@ -86,6 +104,7 @@
 ### 当前定位
 
 Deyes 当前的已实现基础是：
+- **Phase 0-2 已完成**：业务规则矩阵、ERP Lite 核心、素材与本地化体系
 - 需求验证优先的候选发现与排序链路
 - 定价、风控、推荐排序三层的需求上下文集成
 - 推荐服务降级为内部决策引擎
@@ -93,8 +112,9 @@ Deyes 当前的已实现基础是：
 
 ### 当前文档资产
 
-- 核心路线图文档：**2 份**
-- 分阶段实施清单：**6 份**
+- 核心路线图文档：**3 份**（产品路线图、研发路线图、双模式经营架构实施计划）
+- 业务规则矩阵：**3 份**（平台经营模式矩阵、平台内容规则矩阵、SKU 激活规则）
+- 分阶段实施清单：**6 份**（Stage 1-6）
 - 执行版 backlog：**6 份**（Stage 1-6）
 - 已拆解实施任务：**112 项**（Stage 1-6）
 - 已进入执行层拆解的阶段：**Stage 1-6**
@@ -102,6 +122,14 @@ Deyes 当前的已实现基础是：
 
 ### 当前阶段化定位
 
+- **Phase 0**：业务规则矩阵 ✅ 已完成
+  - 平台经营模式矩阵、平台内容规则矩阵、SKU 激活规则
+- **Phase 1**：ERP Lite 核心实现 ✅ 已完成
+  - ProductMaster / ProductVariant、Supplier / SupplierOffer、PurchaseOrder / Inventory
+- **Phase 2**：素材与本地化体系 ✅ 已完成
+  - ContentAsset 扩展、LocalizationContent、PlatformContentRule、素材派生与重生成
+- **Phase 3-6**：待实施
+  - 双模式发布编排、订单/履约/库存联动、真实利润与售后层、生命周期与自动经营控制平面
 - **Stage 0**：稳定当前基线
   - 已在研发路线图中定义
   - 当前尚未单独拆成独立任务清单文档
@@ -193,21 +221,24 @@ Candidate → SKU → Listing → Order → Profit → Feedback → Automated Ac
 建议按以下顺序阅读：
 1. `engineering-roadmap-2026.md`
 2. `dual-mode-operations-plan.md`
-3. 本文档
-4. `stage1-development-backlog.md`
-5. `stage2-development-backlog.md`
-6. `stage3-development-backlog.md`
-7. `stage4-development-backlog.md`
-8. 需要看阶段原始范围时，再回看对应 implementation tasks 文档
+3. 业务规则矩阵（`platform-mode-matrix.md`, `platform-content-rules.md`, `sku-activation-rules.md`）
+4. 本文档
+5. `stage1-development-backlog.md`
+6. `stage2-development-backlog.md`
+7. `stage3-development-backlog.md`
+8. `stage4-development-backlog.md`
+9. 需要看阶段原始范围时，再回看对应 implementation tasks 文档
 
 ### 面向项目启动会 / 排期会
 
 建议使用顺序：
-1. `engineering-roadmap-2026.md` 中的“当前最优先研发事项”
-2. 本文档中的“工作量总表”和“建议执行顺序”
-3. `stage1-development-backlog.md` 作为首个开发包执行入口
-4. `stage2-development-backlog.md` 作为反馈闭环增强包执行入口
-5. `stage3-development-backlog.md` 与 `stage4-development-backlog.md` 作为 ERP Lite 核心排期入口
+1. `engineering-roadmap-2026.md` 中的”当前最优先研发事项”
+2. 业务规则矩阵（`platform-mode-matrix.md`, `platform-content-rules.md`, `sku-activation-rules.md`）
+3. `dual-mode-operations-plan.md` 中的已完成功能亮点
+4. 本文档中的”工作量总表”和”建议执行顺序”
+5. `stage1-development-backlog.md` 作为首个开发包执行入口
+6. `stage2-development-backlog.md` 作为反馈闭环增强包执行入口
+7. `stage3-development-backlog.md` 与 `stage4-development-backlog.md` 作为 ERP Lite 核心排期入口
 
 ---
 
@@ -387,13 +418,15 @@ Stage 6 自动化经营控制平面
 ## 10. 当前建议的最近动作
 
 ### P0
-1. 固化 Stage 0 测试分层与回归入口
-2. 按 `stage1-development-backlog.md` 开始 Stage 1 Batch 1
-3. 在 Stage 1 稳定后按 `stage2-development-backlog.md` 推进反馈引擎增强
+1. ✅ Phase 0-2 已完成（业务规则矩阵、ERP Lite 核心、素材与本地化体系）
+2. 固化 Stage 0 测试分层与回归入口
+3. 按 `stage1-development-backlog.md` 开始 Stage 1 Batch 1
+4. 在 Stage 1 稳定后按 `stage2-development-backlog.md` 推进反馈引擎增强
 
 ### P1
 1. 预先评审 `stage3-development-backlog.md` 中的 Product / SKU / Supplier / Inventory 核心模型
 2. 为 `stage4-development-backlog.md` 中的订单 / 利润台账预留实体关系
+3. 推进 Phase 3-6 实施（双模式发布编排、订单/履约/库存联动、真实利润与售后层、生命周期与自动经营控制平面）
 
 ### P2
 1. 平台策略层
@@ -415,7 +448,7 @@ Stage 6 自动化经营控制平面
 
 ---
 
-**文档版本**: v1.3
+**文档版本**: v1.4
 **创建时间**: 2026-03-25
 **更新时间**: 2026-03-29
 **维护者**: Deyes 研发团队

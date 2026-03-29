@@ -2,7 +2,7 @@
 
 **最后更新**: 2026-03-29
 **架构版本**: v4.0
-**项目阶段**: Phase 0-2 完成，Phase 3-6 待实施
+**项目阶段**: Stage 0-4 完成，Stage 5-6 待实施
 
 ---
 
@@ -21,6 +21,79 @@
 ---
 
 ## 二、最新交付（2026-03-29）
+
+### Stage 3 双模式发布完成 ✅
+
+**核心变更**：
+- ✅ ListingActivationService - Listing 激活判定服务（`backend/app/services/listing_activation_service.py`）
+  - PRE_ORDER 模式：需要供应商报价，允许 0 库存
+  - STOCK_FIRST 模式：需要库存 ≥ 平台阈值
+- ✅ PlatformPublisherAgent 集成激活判定（`backend/app/agents/platform_publisher.py`）
+  - 创建 listing 后自动检查激活条件
+  - 根据平台推断 inventory_mode
+- ✅ 数据库迁移 013_dual_mode_phase3
+
+**影响范围**：
+- 同一 SKU 可同时有 Temu pre_order listing 和 Amazon stock_first listing
+- 两个 listing 共用商品主数据，但激活规则不同
+- pre_order listing 可 0 库存激活（需供应商报价）
+- stock_first listing 需库存达标才激活
+
+**测试状态**：
+- ✅ ListingActivationService 测试（6 个测试用例）
+- ✅ 双模式集成测试（3 个测试用例）
+
+**文档**：
+- `docs/roadmap/dual-mode-operations-plan.md` - Phase 3 完成标记
+
+---
+
+### Stage 4 真实经营损益层完成 ✅
+
+**核心变更**：
+- ✅ PlatformOrder / PlatformOrderLine / FulfillmentRecord 模型（`backend/app/db/models.py`）
+- ✅ RefundCase / SettlementEntry / ProfitLedger 模型（`backend/app/db/models.py`）
+- ✅ OrderIngestionService - 订单导入服务（`backend/app/services/order_ingestion_service.py`）
+  - 订单导入幂等
+  - SKU/listing 映射
+  - 库存联动（pre_order 创建 reservation，stock_first 直接扣减）
+- ✅ ProfitLedgerService - 利润台账服务（`backend/app/services/profit_ledger_service.py`）
+  - 利润台账生成
+  - 退款调整
+  - 广告成本分摊
+  - 多维度利润快照（supplier/platform/listing）
+- ✅ RefundAnalysisService - 退款分析服务（`backend/app/services/refund_analysis_service.py`）
+  - 退款案件创建
+  - 退款率聚合
+  - 退款原因汇总
+  - 联动利润台账
+- ✅ OperatingMetricsService - 经营快照服务（`backend/app/services/operating_metrics_service.py`）
+  - SKU/listing/supplier 经营快照
+  - 聚合利润、退款、表现数据
+- ✅ FeedbackAggregator 升级（`backend/app/services/feedback_aggregator.py`）
+  - 优先消费真实利润/退款数据（≥10 条）
+  - 自动 fallback 到理论利润（<10 条）
+- ✅ 数据库迁移 012_phase4_orders_profit
+
+**影响范围**：
+- 建立了真实订单、退款、利润的事实层
+- FeedbackAggregator 现在优先使用真实经营数据
+- 可查询 SKU/listing/supplier 的真实利润和退款率
+- 广告成本可按比例分摊到利润台账
+
+**测试状态**：
+- ✅ OrderIngestionService 测试（6 个测试用例）
+- ✅ ProfitLedgerService 测试（4 个测试用例）
+- ✅ RefundAnalysisService 测试（4 个测试用例）
+- ✅ OperatingMetricsService 测试（3 个测试用例）
+- ✅ FeedbackAggregator 真实数据消费测试（2 个测试用例）
+- ✅ Phase 4 集成测试（8 个测试用例）
+
+**文档**：
+- `docs/roadmap/stage4-completion-summary.md` - Stage 4 实施总结
+- `docs/roadmap/stage4-verification-checklist.md` - Stage 4 回归验证清单
+
+---
 
 ### Phase 0 业务规则矩阵完成 ✅
 
@@ -272,7 +345,29 @@
 
 ## 四、待完成模块（⏳）
 
-### 4.1 AI 服务部署
+### 4.1 Stage 5 多平台统一经营中枢
+
+**多平台适配与统一 listing 管理**
+- ⏳ 扩展 PlatformListing 支持多平台统一状态管理
+- ⏳ 实现 PlatformRegistry / AdapterResolver
+- ⏳ 实现 UnifiedListingService
+- ⏳ 建立跨平台 SKU 经营视图
+
+**平台策略层与规则配置**
+- ⏳ PlatformPolicy / PlatformCategoryMapping Schema
+- ⏳ PricingRule / ContentRule 策略层
+- ⏳ 多币种与地区化能力
+- ⏳ 多语言 / 本地化内容基础设施
+
+### 4.2 Stage 6 自动化经营控制平面
+
+**自动化经营控制**
+- ⏳ Lifecycle / Action Engine 增强
+- ⏳ Approval / Rollback 控制机制
+- ⏳ Operations Console
+- ⏳ 异常检测与自动动作执行
+
+### 4.3 AI 服务部署
 
 **ComfyUI 图像生成服务**
 - ⏳ FLUX.1-dev 模型下载（~100GB）
@@ -447,52 +542,53 @@ recommendation_score = (
 
 ### P0（立即执行）
 
-1. **回归测试可观测性增强**
+1. **Stage 4 测试验证与环境配置**
+   - 安装 dev 依赖（aiosqlite 等）
+   - 运行 Stage 4 所有测试
+   - 验证数据一致性
+
+2. **回归测试可观测性增强**
    - 统一 `strategy_run_id` / `candidate_product_id` / `listing_id` 的日志追踪
    - 结构化记录 agent 输入、输出、错误
 
-2. **性能数据反馈闭环**
-   - ListingPerformanceDaily 数据采集
-   - AssetPerformanceDaily 数据采集
-   - 转化率/ROI计算
-
-3. **AI自动优化**
-   - 基于性能数据的自动调价算法
-   - 基于转化率的自动素材切换
-   - 基于ROI的自动暂停逻辑
+3. **Stage 5 规划与设计**
+   - 细化多平台统一经营中枢实施计划
+   - 明确 PlatformRegistry / UnifiedListingService 设计
+   - 评估 PlatformPolicy / CategoryMapping Schema
 
 ### P1（短期）
 
-1. **ComfyUI 部署**
+1. **Stage 5 第一批实施**
+   - A1: 扩展 PlatformListing 支持多平台统一状态管理
+   - A2: 实现 PlatformRegistry / AdapterResolver
+   - A3: 实现 UnifiedListingService
+
+2. **AI 服务部署**
    - 按 `docs/deployment/comfyui-deployment-guide.md` 部署
    - 下载 FLUX.1-dev 模型（~100GB）
    - 配置 IPAdapter + ControlNet 工作流
-
-2. **SGLang 部署**
    - 部署 Qwen3.5-35B-A3B（Tensor Parallel）
-   - 配置 GPU 6-7
-   - 测试推理速度和并发
 
 3. **端到端测试**
-   - 选品 → 图像生成 → 推荐 → 反馈 → 上架
+   - 选品 → 图像生成 → 推荐 → 反馈 → 上架 → 订单 → 利润
    - 验证完整业务流程
 
 ### P2（中期）
 
-1. **内容资产管理**
-   - 实现 ContentAsset 模型
-   - 图像质量评分
-   - 版本控制
+1. **Stage 5 第二批实施**
+   - A4: 建立跨平台 SKU 经营视图
+   - B1: PlatformPolicy / CategoryMapping Schema
+   - C1: 多币种与地区化能力
 
-2. **平台发布**
-   - 实现 PlatformListing 模型
-   - Temu/Amazon API 集成
-   - 库存同步
+2. **Stage 6 预研**
+   - Lifecycle / Action Engine 增强设计
+   - Approval / Rollback 控制机制设计
+   - Operations Console 原型
 
-3. **A/B 测试**
-   - 实现 Experiment 模型
-   - 素材对比测试
-   - 转化率追踪
+3. **性能优化与监控**
+   - 利润快照查询缓存
+   - 退款率异常告警
+   - 经营快照 Dashboard
 
 ---
 
@@ -554,14 +650,19 @@ recommendation_score = (
 
 ## 十、总结
 
-Deyes 项目已完成核心选品推荐系统的构建，具备需求验证、供应商匹配、定价计算、风控评估、推荐生成、用户反馈、数据分析等完整功能。技术架构采用 FLUX.1-dev + Qwen3.5 + SGLang 的组合，GPU 资源利用率达 95%。
+Deyes 项目已完成 Stage 0-4 的核心功能构建，建立了从选品推荐、ERP Lite、素材本地化、双模式发布到真实经营损益的完整闭环。技术架构采用 FLUX.1-dev + Qwen3.5 + SGLang 的组合，GPU 资源利用率达 95%。
 
-**当前状态**: 核心选品推荐系统已完成，需求上下文集成已完成，AI 服务待部署
+**当前状态**: Stage 0-4 已完成，包括业务规则矩阵、ERP Lite 核心、素材本地化、双模式发布、真实经营损益层
 
-**下一步重点**: 完成 AI 服务部署（ComfyUI + SGLang），实现端到端业务流程验证，建立性能数据反馈闭环
+**下一步重点**:
+1. Stage 4 测试验证与环境配置
+2. Stage 5 多平台统一经营中枢实施
+3. AI 服务部署（ComfyUI + SGLang）
 
 **长期目标**: 实现日产能 8,000 套，覆盖 6 大跨境电商平台，成为跨境电商自动化运营的行业标杆
 
 ---
 
 **文档维护**: 本文档应在每次重大功能交付后更新
+
+**最后更新**: 2026-03-29 - Stage 3-4 完成状态更新

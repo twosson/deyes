@@ -104,7 +104,7 @@
 ### 当前定位
 
 Deyes 当前的已实现基础是：
-- **Phase 0-2 已完成**：业务规则矩阵、ERP Lite 核心、素材与本地化体系
+- **Stage 0-4 已完成**：业务规则矩阵、ERP Lite 核心、素材与本地化体系、双模式发布、真实经营损益层
 - 需求验证优先的候选发现与排序链路
 - 定价、风控、推荐排序三层的需求上下文集成
 - 推荐服务降级为内部决策引擎
@@ -128,8 +128,12 @@ Deyes 当前的已实现基础是：
   - ProductMaster / ProductVariant、Supplier / SupplierOffer、PurchaseOrder / Inventory
 - **Phase 2**：素材与本地化体系 ✅ 已完成
   - ContentAsset 扩展、LocalizationContent、PlatformContentRule、素材派生与重生成
-- **Phase 3-6**：待实施
-  - 双模式发布编排、订单/履约/库存联动、真实利润与售后层、生命周期与自动经营控制平面
+- **Phase 3**：双模式发布 ✅ 已完成
+  - ListingActivationService、PlatformPublisherAgent 集成激活判定
+- **Phase 4**：真实经营损益层 ✅ 已完成
+  - OrderIngestionService、ProfitLedgerService、RefundAnalysisService、OperatingMetricsService
+- **Phase 5-6**：待实施
+  - 生命周期与自动经营控制平面
 - **Stage 0**：稳定当前基线
   - 已在研发路线图中定义
   - 当前尚未单独拆成独立任务清单文档
@@ -163,15 +167,15 @@ Candidate → SKU → Listing → Order → Profit → Feedback → Automated Ac
 
 ### 3.1 Stage 级别总表
 
-| 阶段 | 核心主题 | 任务数 | 规模等级 | 建议投入角色 | 主要输出 |
-|------|---------|--------|----------|-------------|---------|
-| Stage 1 | 可经营闭环 | 17 | 大型 | 后端 / 平台集成 / 测试 | 表现数据回流、A/B 测试基础、平台同步 |
-| Stage 2 | 经营反馈引擎 | 18 | 大型 | 后端 / 算法 / 测试 | style/platform/region/price-band feedback priors |
-| Stage 3 | ERP Lite 商品与供应链核心 | 19 | 大型 | 后端 / Agent / 测试 | Product / SKU / Supplier / Inventory 事实层 |
-| Stage 4 | 订单、售后、利润台账 | 19 | 大型 | 后端 / 数据 / 测试 | Order / Refund / Profit 真实经营损益层 |
-| Stage 5 | 多平台统一经营中枢 | 20 | 超大型 | 后端 / 平台策略 / 本地化 / 测试 | 平台策略层、多币种、多地区、本地化内容 |
-| Stage 6 | 自动化经营控制平面 | 19 | 大型 | 后端 / Agent / 控制平面 / 测试 | Lifecycle / Action Engine / Operations Control Plane |
-| **总计** | **Stage 1-6** | **112** | **多阶段组合项目** | **后端 + 平台 + 数据 + 测试 + Agent** | **从结果层到自动化经营的完整骨架** |
+| 阶段 | 核心主题 | 任务数 | 规模等级 | 建议投入角色 | 主要输出 | 状态 |
+|------|---------|--------|----------|-------------|---------|------|
+| Stage 1 | 可经营闭环 | 17 | 大型 | 后端 / 平台集成 / 测试 | 表现数据回流、A/B 测试基础、平台同步 | ⏳ 待实施 |
+| Stage 2 | 经营反馈引擎 | 18 | 大型 | 后端 / 算法 / 测试 | style/platform/region/price-band feedback priors | ⏳ 待实施 |
+| Stage 3 | ERP Lite 商品与供应链核心 | 19 | 大型 | 后端 / Agent / 测试 | Product / SKU / Supplier / Inventory 事实层 | ✅ 已完成 |
+| Stage 4 | 订单、售后、利润台账 | 19 | 大型 | 后端 / 数据 / 测试 | Order / Refund / Profit 真实经营损益层 | ✅ 已完成 |
+| Stage 5 | 多平台统一经营中枢 | 20 | 超大型 | 后端 / 平台策略 / 本地化 / 测试 | 平台策略层、多币种、多地区、本地化内容 | ⏳ 待实施 |
+| Stage 6 | 自动化经营控制平面 | 19 | 大型 | 后端 / Agent / 控制平面 / 测试 | Lifecycle / Action Engine / Operations Control Plane | ⏳ 待实施 |
+| **总计** | **Stage 1-6** | **112** | **多阶段组合项目** | **后端 + 平台 + 数据 + 测试 + Agent** | **从结果层到自动化经营的完整骨架** | **Stage 3-4 已完成** |
 
 ### 3.2 开发包级别总表
 
@@ -418,20 +422,42 @@ Stage 6 自动化经营控制平面
 ## 10. 当前建议的最近动作
 
 ### P0
-1. ✅ Phase 0-2 已完成（业务规则矩阵、ERP Lite 核心、素材与本地化体系）
-2. 固化 Stage 0 测试分层与回归入口
-3. 按 `stage1-development-backlog.md` 开始 Stage 1 Batch 1
-4. 在 Stage 1 稳定后按 `stage2-development-backlog.md` 推进反馈引擎增强
+1. ✅ Stage 0-4 已完成（业务规则矩阵、ERP Lite 核心、素材与本地化体系、双模式发布、真实经营损益层）
+2. **Stage 4 测试验证与环境配置**
+   - 安装 dev 依赖（aiosqlite 等）
+   - 运行 Stage 4 所有测试
+   - 验证数据一致性
+3. **Stage 5 规划与设计**
+   - ��化多平台统一经营中枢实施计划
+   - 明确 PlatformRegistry / UnifiedListingService 设计
+   - 评估 PlatformPolicy / CategoryMapping Schema
 
 ### P1
-1. 预先评审 `stage3-development-backlog.md` 中的 Product / SKU / Supplier / Inventory 核心模型
-2. 为 `stage4-development-backlog.md` 中的订单 / 利润台账预留实体关系
-3. 推进 Phase 3-6 实施（双模式发布编排、订单/履约/库存联动、真实利润与售后层、生命周期与自动经营控制平面）
+1. **Stage 5 第一批实施**
+   - A1: 扩展 PlatformListing 支持多平台统一状态管理
+   - A2: 实现 PlatformRegistry / AdapterResolver
+   - A3: 实现 UnifiedListingService
+2. **Stage 1-2 预研**
+   - 预先评审表现数据回流与反馈引擎增强
+   - 为 ListingPerformanceDaily / AssetPerformanceDaily 预留实体关系
+3. **AI 服务部署**
+   - 按 `docs/deployment/comfyui-deployment-guide.md` 部署
+   - 下载 FLUX.1-dev 模型（~100GB）
+   - 配置 IPAdapter + ControlNet 工作流
 
 ### P2
-1. 平台策略层
-2. 本地化内容基础设施
-3. 自动动作控制平面
+1. **Stage 5 第二批实施**
+   - A4: 建立跨平台 SKU 经营视图
+   - B1: PlatformPolicy / CategoryMapping Schema
+   - C1: 多币种与地区化能力
+2. **Stage 6 预研**
+   - Lifecycle / Action Engine 增强设计
+   - Approval / Rollback 控制机制设计
+   - Operations Console 原型
+3. **性能优化与监控**
+   - 利润快照查询缓存
+   - 退款率异常告警
+   - 经营快照 Dashboard
 
 ---
 

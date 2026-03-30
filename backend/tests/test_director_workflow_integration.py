@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.base.agent import AgentContext, AgentResult, BaseAgent
+from app.agents.content_asset_manager import ContentAssetManagerAgent
 from app.agents.director_workflow import DirectorWorkflow
 from app.core.enums import (
     CandidateStatus,
@@ -116,12 +117,21 @@ async def _add_risk_assessment(
 
 @pytest.mark.asyncio
 async def test_director_workflow_converts_eligible_candidates(db_session: AsyncSession):
-    """DirectorWorkflow should convert eligible candidates to masters."""
+    """DirectorWorkflow should convert eligible candidates to masters and generate base assets."""
+    from unittest.mock import AsyncMock
+
     strategy_run = await _create_strategy_run(db_session)
     candidate = await _create_candidate(db_session, strategy_run.id)
     await _add_pricing_assessment(db_session, candidate.id)
     await _add_risk_assessment(db_session, candidate.id)
     await db_session.commit()
+
+    # Mock clients for content asset manager
+    mock_comfyui = AsyncMock()
+    mock_comfyui.generate_product_image = AsyncMock(return_value=b"fake_image_data")
+
+    mock_minio = AsyncMock()
+    mock_minio.upload_image = AsyncMock(return_value="https://example.com/base.jpg")
 
     workflow = DirectorWorkflow()
     workflow.product_selector = _MockAgent(
@@ -140,6 +150,10 @@ async def test_director_workflow_converts_eligible_candidates(db_session: AsyncS
         "copywriter",
         AgentResult(success=True, output_data={"copywriting_completed": True}),
     )
+    workflow.content_asset_manager = ContentAssetManagerAgent(
+        comfyui_client=mock_comfyui,
+        minio_client=mock_minio,
+    )
 
     result = await workflow.execute_pipeline(strategy_run_id=strategy_run.id, db=db_session)
 
@@ -148,10 +162,10 @@ async def test_director_workflow_converts_eligible_candidates(db_session: AsyncS
     assert result["masters_created"] == 1
     assert "master_conversion" in result["steps"]
 
-    # Verify candidate was converted
+    # Verify candidate was converted and lifecycle progressed to READY_TO_PUBLISH
     await db_session.refresh(candidate)
     assert candidate.internal_sku is not None
-    assert candidate.lifecycle_status == ProductLifecycle.APPROVED
+    assert candidate.lifecycle_status == ProductLifecycle.READY_TO_PUBLISH
 
     # Verify ProductMaster and ProductVariant were created
     master_stmt = select(ProductMaster).where(ProductMaster.candidate_product_id == candidate.id)

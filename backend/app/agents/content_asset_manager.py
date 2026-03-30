@@ -385,6 +385,10 @@ class ContentAssetManagerAgent(BaseAgent):
                 asset_types=asset_types,
             )
 
+            # Update lifecycle status to CONTENT_GENERATING
+            candidate.lifecycle_status = ProductLifecycle.CONTENT_GENERATING
+            await context.db.commit()
+
             # Initialize clients
             if self.comfyui_client is None:
                 self.comfyui_client = get_comfyui_client()
@@ -429,10 +433,19 @@ class ContentAssetManagerAgent(BaseAgent):
                             )
                             continue
 
+            # Update lifecycle status based on asset creation result
+            if created_assets:
+                candidate.lifecycle_status = ProductLifecycle.READY_TO_PUBLISH
+            else:
+                candidate.lifecycle_status = ProductLifecycle.DRAFT
+
+            await context.db.commit()
+
             self.logger.info(
                 "base_asset_generation_completed",
                 variant_id=variant_id_str,
                 assets_created=len(created_assets),
+                lifecycle_status=candidate.lifecycle_status.value if candidate.lifecycle_status else None,
             )
 
             return AgentResult(
@@ -443,6 +456,7 @@ class ContentAssetManagerAgent(BaseAgent):
                     "assets_created": len(created_assets),
                     "asset_ids": [str(a.id) for a in created_assets],
                     "usage_scope": ContentUsageScope.BASE.value,
+                    "lifecycle_status": candidate.lifecycle_status.value if candidate.lifecycle_status else None,
                 },
             )
 
@@ -452,6 +466,23 @@ class ContentAssetManagerAgent(BaseAgent):
                 error=str(e),
                 error_type=type(e).__name__,
             )
+            # Try to rollback lifecycle status on error
+            try:
+                candidate_product_id_str = context.input_data.get("candidate_product_id")
+                variant_id_str = context.input_data.get("variant_id")
+                candidate = None
+                if variant_id_str:
+                    variant = await context.db.get(ProductVariant, UUID(variant_id_str))
+                    if variant:
+                        candidate = await context.db.get(CandidateProduct, variant.master.candidate_product_id)
+                elif candidate_product_id_str:
+                    candidate = await context.db.get(CandidateProduct, UUID(candidate_product_id_str))
+                if candidate:
+                    candidate.lifecycle_status = ProductLifecycle.DRAFT
+                    await context.db.commit()
+            except Exception:
+                pass
+
             return AgentResult(success=False, error_message=str(e))
 
 

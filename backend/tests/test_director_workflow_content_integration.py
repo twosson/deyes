@@ -11,6 +11,7 @@ from app.core.enums import (
     AssetType,
     CandidateStatus,
     ContentUsageScope,
+    ProductLifecycle,
     ProfitabilityDecision,
     RiskDecision,
     SourcePlatform,
@@ -156,6 +157,10 @@ async def test_content_asset_manager_generate_base_assets(db_session: AsyncSessi
     assert agent_result.success is True
     assert agent_result.output_data["assets_created"] == 1
     assert agent_result.output_data["usage_scope"] == "base"
+    assert agent_result.output_data["lifecycle_status"] == ProductLifecycle.READY_TO_PUBLISH.value
+
+    await db_session.refresh(candidate)
+    assert candidate.lifecycle_status == ProductLifecycle.READY_TO_PUBLISH
 
     # Verify asset in database
     await db_session.commit()
@@ -172,3 +177,54 @@ async def test_content_asset_manager_generate_base_assets(db_session: AsyncSessi
     assert assets[0].asset_type == AssetType.MAIN_IMAGE
     assert assets[0].product_variant_id == result.product_variant.id
     assert assets[0].candidate_product_id == candidate.id
+
+
+@pytest.mark.asyncio
+async def test_content_asset_manager_generate_base_assets_without_output_keeps_not_ready(
+    db_session: AsyncSession,
+):
+    """Base asset generation should not mark candidate ready when no assets are created."""
+    from unittest.mock import AsyncMock
+
+    strategy_run = await _create_strategy_run(db_session)
+    candidate = await _create_candidate(db_session, strategy_run.id)
+    await _add_pricing_assessment(db_session, candidate.id)
+    await _add_risk_assessment(db_session, candidate.id)
+    await db_session.commit()
+
+    from app.services.product_master_service import ProductMasterService
+
+    master_service = ProductMasterService()
+    result = await master_service.create_from_candidate(candidate.id, db_session)
+    await db_session.commit()
+
+    mock_comfyui = AsyncMock()
+    mock_comfyui.generate_product_image = AsyncMock(side_effect=RuntimeError("generation failed"))
+
+    mock_minio = AsyncMock()
+
+    agent = ContentAssetManagerAgent(
+        comfyui_client=mock_comfyui,
+        minio_client=mock_minio,
+    )
+
+    context = AgentContext(
+        strategy_run_id=strategy_run.id,
+        db=db_session,
+        input_data={
+            "action": "generate_base_assets",
+            "variant_id": str(result.product_variant.id),
+            "asset_types": ["main_image"],
+            "styles": ["minimalist"],
+            "generate_count": 1,
+        },
+    )
+
+    agent_result = await agent.execute(context)
+
+    assert agent_result.success is True
+    assert agent_result.output_data["assets_created"] == 0
+    assert agent_result.output_data["lifecycle_status"] == ProductLifecycle.DRAFT.value
+
+    await db_session.refresh(candidate)
+    assert candidate.lifecycle_status == ProductLifecycle.DRAFT

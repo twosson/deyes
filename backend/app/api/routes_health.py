@@ -43,7 +43,7 @@ async def readiness_check(db: AsyncSession = Depends(get_db)):
         value = await redis_client.get("health_check")
         if value == "ok":
             checks["redis"] = "healthy"
-        await redis_client.aclose()
+        await redis_client.close()
     except Exception as e:
         logger.error("redis_health_check_failed", error=str(e))
         checks["redis"] = "unhealthy"

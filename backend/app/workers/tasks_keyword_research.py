@@ -97,7 +97,7 @@ async def _generate_keywords_for_category(
         }
     finally:
         if redis_client:
-            await redis_client.aclose()
+            await redis_client.close()
 
 
 @celery_app.task(name="tasks.generate_trending_keywords", bind=True)

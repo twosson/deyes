@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import pytest_asyncio
 from sqlalchemy import ARRAY as SA_ARRAY, JSON
-from sqlalchemy.dialects.postgresql import ARRAY as PG_ARRAY, UUID as PGUUID
+from sqlalchemy.dialects.postgresql import ARRAY as PG_ARRAY, JSONB as PG_JSONB, UUID as PGUUID
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.ext.compiler import compiles
 
@@ -33,18 +33,26 @@ def compile_array_sqlite(_type, _compiler, **_kw):
     return "JSON"
 
 
-def _adapt_array_columns_for_sqlite() -> None:
-    """Replace ARRAY column types with JSON so SQLite can bind Python lists."""
+@compiles(PG_JSONB, "sqlite")
+def compile_jsonb_sqlite(_type, _compiler, **_kw):
+    """Map PostgreSQL JSONB columns to SQLite JSON storage for tests."""
+    return "JSON"
+
+
+def _adapt_pg_columns_for_sqlite() -> None:
+    """Replace PostgreSQL-specific column types with SQLite-compatible equivalents."""
     for table in Base.metadata.tables.values():
         for column in table.columns:
             if isinstance(column.type, (SA_ARRAY, PG_ARRAY)):
+                column.type = JSON()
+            if isinstance(column.type, PG_JSONB):
                 column.type = JSON()
 
 
 @pytest_asyncio.fixture
 async def db_session():
     """Create a test database session."""
-    _adapt_array_columns_for_sqlite()
+    _adapt_pg_columns_for_sqlite()
     engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
 
     async with engine.begin() as conn:
@@ -65,6 +73,7 @@ async def sample_strategy_run(db_session):
         id=uuid4(),
         trigger_type=TriggerType.MANUAL,
         status=StrategyRunStatus.COMPLETED,
+        source_platform=SourcePlatform.TEMU,
     )
     db_session.add(strategy_run)
     await db_session.commit()

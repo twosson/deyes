@@ -1,9 +1,11 @@
 """Pricing calculation service."""
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
-from app.core.enums import ProfitabilityDecision
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.enums import ProfitabilityDecision, TargetPlatform
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -318,6 +320,8 @@ class PricingResult:
         competition_density: Optional[str] = None,
         discovery_mode: Optional[str] = None,
         degraded: bool = False,
+        profitable_threshold_override: Optional[Decimal] = None,
+        marginal_threshold_override: Optional[Decimal] = None,
     ):
         self.supplier_price = supplier_price
         self.platform_price = platform_price
@@ -332,14 +336,24 @@ class PricingResult:
         self.degraded = degraded
 
         # Get dynamic thresholds based on platform and category
-        base_profitable_threshold = PricingConfig.get_profitable_threshold(platform, category)
+        # Priority: 1) explicit override, 2) PricingConfig.get_profitable_threshold(), 3) default
+        if profitable_threshold_override is not None:
+            base_profitable_threshold = profitable_threshold_override
+        else:
+            base_profitable_threshold = PricingConfig.get_profitable_threshold(platform, category)
+
         demand_adjustment = PricingConfig.get_demand_context_adjustment(
             competition_density=competition_density,
             discovery_mode=discovery_mode,
             degraded=degraded,
         )
         self.profitable_threshold = base_profitable_threshold + demand_adjustment
-        self.marginal_threshold = self.profitable_threshold * Decimal("0.60")
+
+        # Marginal threshold: use override if provided, otherwise calculate from profitable threshold
+        if marginal_threshold_override is not None:
+            self.marginal_threshold = marginal_threshold_override
+        else:
+            self.marginal_threshold = self.profitable_threshold * Decimal("0.60")
 
         # Calculate costs
         self.platform_commission = platform_price * platform_commission_rate
@@ -523,6 +537,198 @@ class PricingService:
 
         return result
 
+    async def calculate_pricing_with_policy(
+        self,
+        *,
+        db: AsyncSession,
+        supplier_price: Decimal,
+        platform_price: Decimal,
+        platform: Union[str, TargetPlatform],
+        region: Optional[str] = None,
+        category: Optional[str] = None,
+        shipping_cost: Optional[Decimal] = None,
+        competition_density: Optional[str] = None,
+        discovery_mode: Optional[str] = None,
+        degraded: bool = False,
+    ) -> PricingResult:
+        """Calculate pricing using platform policy configuration.
+
+        Falls back to hardcoded PricingConfig if no policy found.
+
+        Args:
+            db: Database session
+            supplier_price: Supplier price
+            platform_price: Platform selling price
+            platform: Platform name or enum
+            region: Region code (optional)
+            category: Category name (optional)
+            shipping_cost: Shipping cost (optional)
+            competition_density: Demand competition density
+            discovery_mode: Demand discovery mode
+            degraded: Whether demand discovery ran in degraded mode
+
+        Returns:
+            PricingResult with policy-aware configuration
+        """
+        # Import here to avoid circular dependency
+        from app.services.platform_policy_service import PlatformPolicyService
+
+        policy_service = PlatformPolicyService()
+
+        # Convert platform to enum if string
+        platform_enum = platform if isinstance(platform, TargetPlatform) else TargetPlatform(platform)
+
+        # Get commission config from policy
+        commission_config = await policy_service.get_commission_config(
+            db=db,
+            platform=platform_enum,
+            region=region,
+        )
+
+        # Get pricing config from policy
+        pricing_config = await policy_service.get_pricing_config(
+            db=db,
+            platform=platform_enum,
+            region=region,
+        )
+
+        # Merge policy configs
+        platform_commission_rate = Decimal(str(commission_config.get("commission_rate", self.config.DEFAULT_PLATFORM_COMMISSION)))
+        payment_fee_rate = Decimal(str(commission_config.get("payment_fee_rate", self.config.DEFAULT_PAYMENT_FEE)))
+        return_rate_assumption = Decimal(str(commission_config.get("return_rate_assumption", self.config.DEFAULT_RETURN_RATE)))
+
+        # Shipping rate from pricing config
+        shipping_rate_default = Decimal(str(pricing_config.get("shipping_rate_default", self.config.DEFAULT_SHIPPING_RATE)))
+        if shipping_cost is None:
+            shipping_cost = supplier_price * shipping_rate_default
+
+        # Threshold overrides from pricing config
+        profitable_threshold_override = None
+        marginal_threshold_override = None
+
+        # Base profitable threshold from policy
+        if "profitable_threshold" in pricing_config:
+            profitable_threshold_override = Decimal(str(pricing_config["profitable_threshold"]))
+
+        # Category-specific override
+        category_overrides = pricing_config.get("category_threshold_overrides", {})
+        if category and category.lower() in category_overrides:
+            profitable_threshold_override = Decimal(str(category_overrides[category.lower()]))
+
+        # Marginal threshold ratio from policy
+        if profitable_threshold_override is not None and "marginal_threshold_ratio" in pricing_config:
+            marginal_threshold_ratio = Decimal(str(pricing_config["marginal_threshold_ratio"]))
+            marginal_threshold_override = profitable_threshold_override * marginal_threshold_ratio
+
+        # Construct PricingResult with overrides
+        result = PricingResult(
+            supplier_price=supplier_price,
+            platform_price=platform_price,
+            estimated_shipping_cost=shipping_cost,
+            platform_commission_rate=platform_commission_rate,
+            payment_fee_rate=payment_fee_rate,
+            return_rate_assumption=return_rate_assumption,
+            platform=platform_enum.value,
+            category=category,
+            competition_density=competition_density,
+            discovery_mode=discovery_mode,
+            degraded=degraded,
+            profitable_threshold_override=profitable_threshold_override,
+            marginal_threshold_override=marginal_threshold_override,
+        )
+
+        logger.info(
+            "pricing_calculated_with_policy",
+            supplier_price=float(supplier_price),
+            platform_price=float(platform_price),
+            margin_percentage=float(result.margin_percentage),
+            decision=result.profitability_decision.value,
+            platform=platform_enum.value,
+            region=region,
+            category=category,
+            profitable_threshold=float(result.profitable_threshold),
+            marginal_threshold=float(result.marginal_threshold),
+            policy_applied=True,
+        )
+
+        return result
+
+    async def get_effective_pricing_inputs(
+        self,
+        *,
+        db: AsyncSession,
+        platform: Union[str, TargetPlatform],
+        region: Optional[str] = None,
+        category: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Get effective pricing inputs from policy with fallback.
+
+        Returns dict with:
+        - commission_rate
+        - payment_fee_rate
+        - return_rate_assumption
+        - shipping_rate
+        - profitable_threshold
+        - marginal_threshold
+
+        Args:
+            db: Database session
+            platform: Platform name or enum
+            region: Region code (optional)
+            category: Category name (optional)
+
+        Returns:
+            Dict with effective pricing inputs
+        """
+        # Import here to avoid circular dependency
+        from app.services.platform_policy_service import PlatformPolicyService
+
+        policy_service = PlatformPolicyService()
+
+        # Convert platform to enum if string
+        platform_enum = platform if isinstance(platform, TargetPlatform) else TargetPlatform(platform)
+
+        # Get commission config from policy
+        commission_config = await policy_service.get_commission_config(
+            db=db,
+            platform=platform_enum,
+            region=region,
+        )
+
+        # Get pricing config from policy
+        pricing_config = await policy_service.get_pricing_config(
+            db=db,
+            platform=platform_enum,
+            region=region,
+        )
+
+        # Build effective inputs
+        commission_rate = Decimal(str(commission_config.get("commission_rate", self.config.DEFAULT_PLATFORM_COMMISSION)))
+        payment_fee_rate = Decimal(str(commission_config.get("payment_fee_rate", self.config.DEFAULT_PAYMENT_FEE)))
+        return_rate_assumption = Decimal(str(commission_config.get("return_rate_assumption", self.config.DEFAULT_RETURN_RATE)))
+        shipping_rate = Decimal(str(pricing_config.get("shipping_rate_default", self.config.DEFAULT_SHIPPING_RATE)))
+
+        # Threshold calculation
+        profitable_threshold = Decimal(str(pricing_config.get("profitable_threshold", self.config.PROFITABLE_THRESHOLD)))
+
+        # Category-specific override
+        category_overrides = pricing_config.get("category_threshold_overrides", {})
+        if category and category.lower() in category_overrides:
+            profitable_threshold = Decimal(str(category_overrides[category.lower()]))
+
+        # Marginal threshold
+        marginal_threshold_ratio = Decimal(str(pricing_config.get("marginal_threshold_ratio", "0.60")))
+        marginal_threshold = profitable_threshold * marginal_threshold_ratio
+
+        return {
+            "commission_rate": commission_rate,
+            "payment_fee_rate": payment_fee_rate,
+            "return_rate_assumption": return_rate_assumption,
+            "shipping_rate": shipping_rate,
+            "profitable_threshold": profitable_threshold,
+            "marginal_threshold": marginal_threshold,
+        }
+
     def _score_supplier_path(
         self,
         path: SupplierPathInput,
@@ -692,6 +898,185 @@ class PricingService:
         if isinstance(value, (int, float, Decimal)):
             return value != 0
         return False
+
+    async def calculate_regionalized_pricing(
+        self,
+        *,
+        db: AsyncSession,
+        supplier_price: Decimal,
+        platform_price: Decimal,
+        platform: Union[str, TargetPlatform],
+        region: str,
+        base_currency: str = "USD",
+        local_currency: Optional[str] = None,
+        category: Optional[str] = None,
+        shipping_cost: Optional[Decimal] = None,
+        competition_density: Optional[str] = None,
+        discovery_mode: Optional[str] = None,
+        degraded: bool = False,
+    ) -> dict[str, Any]:
+        """Calculate regionalized pricing with tax estimation and currency conversion.
+
+        Args:
+            db: Database session
+            supplier_price: Supplier price (in base currency)
+            platform_price: Platform selling price (in local currency)
+            platform: Platform name or enum
+            region: Region code
+            base_currency: Base currency for profit comparison (default: USD)
+            local_currency: Local currency for the region (optional, defaults to base_currency)
+            category: Category name (optional)
+            shipping_cost: Shipping cost (optional)
+            competition_density: Demand competition density
+            discovery_mode: Demand discovery mode
+            degraded: Whether demand discovery ran in degraded mode
+
+        Returns:
+            Dict with:
+                - local_price: Price in local currency
+                - base_currency_profit: Profit in base currency
+                - tax_estimate: Estimated tax amount
+                - risk_notes: List of risk warnings
+                - pricing_result: Standard PricingResult dict
+                - currency_metadata: Currency conversion metadata
+        """
+        from app.services.currency_converter import CurrencyConverter
+        from app.services.platform_policy_service import PlatformPolicyService
+
+        policy_service = PlatformPolicyService()
+        currency_converter = CurrencyConverter()
+
+        # Convert platform to enum if string
+        platform_enum = platform if isinstance(platform, TargetPlatform) else TargetPlatform(platform)
+
+        # Default local currency to base currency if not specified
+        if local_currency is None:
+            local_currency = base_currency
+
+        # Calculate base pricing using policy-aware method
+        pricing_result = await self.calculate_pricing_with_policy(
+            db=db,
+            supplier_price=supplier_price,
+            platform_price=platform_price,
+            platform=platform_enum,
+            region=region,
+            category=category,
+            shipping_cost=shipping_cost,
+            competition_density=competition_density,
+            discovery_mode=discovery_mode,
+            degraded=degraded,
+        )
+
+        # Query tax rules
+        tax_rules = await policy_service.get_tax_rules(
+            db=db,
+            platform=platform_enum,
+            region=region,
+        )
+
+        # Calculate tax estimate
+        tax_estimate = Decimal("0.00")
+        tax_breakdown = []
+        for rule in tax_rules:
+            tax_amount = platform_price * rule.tax_rate
+            tax_estimate += tax_amount
+            tax_breakdown.append({
+                "tax_type": rule.tax_type,
+                "tax_rate": float(rule.tax_rate),
+                "tax_amount": float(tax_amount),
+                "applies_to": rule.applies_to,
+            })
+
+        # Query risk rules
+        risk_rules = await policy_service.get_risk_rules(
+            db=db,
+            platform=platform_enum,
+            region=region,
+        )
+
+        # Build risk notes
+        risk_notes = []
+        for rule in risk_rules:
+            risk_notes.append({
+                "rule_code": rule.rule_code,
+                "severity": rule.severity,
+                "rule_data": rule.rule_data,
+                "notes": rule.notes,
+            })
+
+        # Convert profit to base currency if needed
+        base_currency_profit = pricing_result.estimated_margin
+        if local_currency != base_currency:
+            try:
+                base_currency_profit = await currency_converter.convert_amount(
+                    db=db,
+                    amount=pricing_result.estimated_margin,
+                    from_currency=local_currency,
+                    to_currency=base_currency,
+                )
+            except ValueError as e:
+                logger.warning(
+                    "currency_conversion_failed_for_profit",
+                    from_currency=local_currency,
+                    to_currency=base_currency,
+                    error=str(e),
+                )
+
+        # Check minimum margin requirement from pricing policy
+        pricing_config = await policy_service.get_pricing_config(
+            db=db,
+            platform=platform_enum,
+            region=region,
+        )
+        min_margin_percentage = pricing_config.get("min_margin_percentage")
+        margin_check_passed = True
+        margin_check_note = None
+
+        if min_margin_percentage is not None:
+            min_margin_decimal = Decimal(str(min_margin_percentage))
+            actual_margin_ratio = pricing_result.estimated_margin / platform_price if platform_price > 0 else Decimal("0")
+            if actual_margin_ratio < min_margin_decimal:
+                margin_check_passed = False
+                margin_check_note = (
+                    f"Margin {float(actual_margin_ratio * 100):.2f}% is below "
+                    f"minimum required {float(min_margin_decimal * 100):.2f}% for {platform_enum.value}/{region}"
+                )
+
+        # Build result
+        result = {
+            "local_price": float(platform_price),
+            "local_currency": local_currency,
+            "base_currency_profit": float(base_currency_profit),
+            "base_currency": base_currency,
+            "tax_estimate": float(tax_estimate),
+            "tax_breakdown": tax_breakdown,
+            "risk_notes": risk_notes,
+            "pricing_result": pricing_result.to_dict(),
+            "currency_metadata": {
+                "local_currency": local_currency,
+                "base_currency": base_currency,
+                "conversion_applied": local_currency != base_currency,
+            },
+            "margin_check": {
+                "passed": margin_check_passed,
+                "min_margin_percentage": float(min_margin_decimal) if min_margin_percentage is not None else None,
+                "actual_margin_percentage": float(pricing_result.margin_percentage),
+                "note": margin_check_note,
+            },
+        }
+
+        logger.info(
+            "regionalized_pricing_calculated",
+            platform=platform_enum.value,
+            region=region,
+            local_price=float(platform_price),
+            base_currency_profit=float(base_currency_profit),
+            tax_estimate=float(tax_estimate),
+            risk_count=len(risk_notes),
+            margin_check_passed=margin_check_passed,
+        )
+
+        return result
 
     def _quantize(self, value: Decimal) -> Decimal:
         """Quantize supplier selection scores for stable storage and tests."""

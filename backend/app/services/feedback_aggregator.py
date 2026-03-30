@@ -7,7 +7,7 @@ Stage 4 Enhancement: Prioritizes real profit/refund facts, falls back to theoret
 """
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from sqlalchemy import and_, func, select
@@ -42,7 +42,7 @@ class FeedbackAggregator:
         Stage 4 Enhancement: Prioritizes real profit/refund facts when available,
         falls back to theoretical signals (PricingAssessment, RiskAssessment) when insufficient.
         """
-        cutoff = datetime.now(UTC) - timedelta(days=self.lookback_days)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=self.lookback_days)
 
         # Import Stage 4 services for real profit/refund data
         from app.services.profit_ledger_service import ProfitLedgerService
@@ -114,12 +114,12 @@ class FeedbackAggregator:
                     real_profit_snapshot = await profit_service.get_profit_snapshot(
                         db=db,
                         product_variant_id=variant_id,
-                        start_date=(datetime.now(UTC) - timedelta(days=self.lookback_days)).date(),
+                        start_date=(datetime.now(timezone.utc) - timedelta(days=self.lookback_days)).date(),
                     )
                     real_refund_rate = await refund_service.get_refund_rate(
                         db=db,
                         product_variant_id=variant_id,
-                        start_date=(datetime.now(UTC) - timedelta(days=self.lookback_days)).date(),
+                        start_date=(datetime.now(timezone.utc) - timedelta(days=self.lookback_days)).date(),
                     )
                 except Exception as e:
                     self.logger.debug(

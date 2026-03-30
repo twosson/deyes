@@ -11,6 +11,10 @@ const ExperimentDetailPage = () => import('@/pages/experiments/ExperimentDetailP
 const ExperimentsPage = () => import('@/pages/experiments/ExperimentsPage.vue')
 const PerformanceMonitorPage = () => import('@/pages/performance/PerformanceMonitorPage.vue')
 const PlatformListingsPage = () => import('@/pages/platform-listings/PlatformListingsPage.vue')
+const ExceptionsPage = () => import('@/pages/operations/ExceptionsPage.vue')
+const LifecyclePage = () => import('@/pages/operations/LifecyclePage.vue')
+const OperationsDashboardPage = () => import('@/pages/operations/OperationsDashboardPage.vue')
+const PendingActionsPage = () => import('@/pages/operations/PendingActionsPage.vue')
 const ProductDetailPage = () => import('@/pages/products/ProductDetailPage.vue')
 const ProductsPage = () => import('@/pages/products/ProductsPage.vue')
 const TaskMonitorPage = () => import('@/pages/task-monitor/TaskMonitorPage.vue')
@@ -95,6 +99,30 @@ const routes: RouteRecordRaw[] = [
         name: 'performance',
         component: PerformanceMonitorPage,
         meta: { title: '性能监控', menuKey: '/performance' },
+      },
+      {
+        path: 'operations',
+        name: 'operations',
+        component: OperationsDashboardPage,
+        meta: { title: '运营控制台', menuKey: '/operations' },
+      },
+      {
+        path: 'operations/exceptions',
+        name: 'operations-exceptions',
+        component: ExceptionsPage,
+        meta: { title: '异常列表', menuKey: '/operations' },
+      },
+      {
+        path: 'operations/pending-actions',
+        name: 'operations-pending-actions',
+        component: PendingActionsPage,
+        meta: { title: '待办事项', menuKey: '/operations' },
+      },
+      {
+        path: 'operations/lifecycle',
+        name: 'operations-lifecycle',
+        component: LifecyclePage,
+        meta: { title: '生命周期', menuKey: '/operations' },
       },
     ],
   },

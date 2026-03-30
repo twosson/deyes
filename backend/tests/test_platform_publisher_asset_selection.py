@@ -105,6 +105,7 @@ async def _create_variant_with_assets(
         file_url="https://example.com/amazon.jpg",
         usage_scope=ContentUsageScope.PLATFORM_DERIVED,
         platform_tags=["amazon"],
+        language_tags=["en"],
         parent_asset_id=base_asset.id,
         human_approved=True,
         spec={
@@ -368,6 +369,7 @@ async def test_resolve_variant_id(db_session: AsyncSession):
         strategy_run_id=strategy_run.id,
         source_platform=SourcePlatform.ALIBABA_1688,
         title="Test Product",
+        status=CandidateStatus.DISCOVERED,
     )
     db_session.add(candidate)
     await db_session.flush()
@@ -419,6 +421,7 @@ async def test_resolve_variant_id_not_found(db_session: AsyncSession):
         strategy_run_id=strategy_run.id,
         source_platform=SourcePlatform.ALIBABA_1688,
         title="Test Product",
+        status=CandidateStatus.DISCOVERED,
     )
     db_session.add(candidate)
     await db_session.commit()

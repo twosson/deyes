@@ -55,6 +55,9 @@ class PlatformAdapter(ABC):
         description: str | None = None,
         category: str | None = None,
         attributes: dict[str, Any] | None = None,
+        category_id: str | int | None = None,
+        category_name: str | None = None,
+        platform_context: dict[str, Any] | None = None,
     ) -> PlatformListingData:
         """Create a new listing on the platform.
 
@@ -67,8 +70,11 @@ class PlatformAdapter(ABC):
             inventory: Initial inventory
             title: Custom title (optional, uses product.title if None)
             description: Product description
-            category: Platform-specific category
+            category: Internal category name
             attributes: Platform-specific attributes
+            category_id: Resolved platform category ID from policy mapping (optional)
+            category_name: Resolved platform category name from policy mapping (optional)
+            platform_context: Additional platform-specific context (optional)
 
         Returns:
             PlatformListingData with platform listing ID and status
@@ -239,6 +245,9 @@ class MockPlatformAdapter(PlatformAdapter):
         description: str | None = None,
         category: str | None = None,
         attributes: dict[str, Any] | None = None,
+        category_id: str | int | None = None,
+        category_name: str | None = None,
+        platform_context: dict[str, Any] | None = None,
     ) -> PlatformListingData:
         """Mock create listing."""
         import uuid

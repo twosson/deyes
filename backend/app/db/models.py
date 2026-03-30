@@ -6,6 +6,7 @@ from uuid import UUID
 
 from sqlalchemy import (
     ARRAY,
+    Boolean,
     DECIMAL,
     JSON,
     Date,
@@ -21,6 +22,8 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.enums import (
+    ActionExecutionStatus,
+    ActionType,
     AgentRunStatus,
     AssetType,
     CandidateStatus,
@@ -35,6 +38,8 @@ from app.core.enums import (
     LocalizationType,
     OrderLineStatus,
     OrderStatus,
+    OverrideTargetType,
+    OverrideType,
     PlatformListingStatus,
     ProductLifecycle,
     ProductMasterStatus,
@@ -44,6 +49,7 @@ from app.core.enums import (
     RefundReason,
     RefundStatus,
     RiskDecision,
+    SkuLifecycleState,
     SourcePlatform,
     StrategyRunStatus,
     SupplierStatus,
@@ -465,6 +471,10 @@ class PlatformListing(Base, UpdateTimestampMixin):
     """
 
     __tablename__ = "platform_listings"
+    __table_args__ = (
+        Index("idx_platform_marketplace_listing", "platform", "marketplace", "platform_listing_id", unique=True),
+        Index("idx_variant_platform_region", "product_variant_id", "platform", "region"),
+    )
 
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
     candidate_product_id: Mapped[UUID] = mapped_column(
@@ -482,6 +492,7 @@ class PlatformListing(Base, UpdateTimestampMixin):
         SAEnum(TargetPlatform, native_enum=False), nullable=False, index=True
     )
     region: Mapped[str] = mapped_column(String(10), nullable=False, index=True)  # "us", "uk", "de"
+    marketplace: Mapped[Optional[str]] = mapped_column(String(50), index=True)  # "amazon_us", "amazon_uk"
 
     # 平台商品ID
     platform_listing_id: Mapped[Optional[str]] = mapped_column(String(100), index=True)  # Temu SKU, Amazon ASIN
@@ -763,6 +774,8 @@ class ProductVariant(Base, UpdateTimestampMixin):
     master: Mapped["ProductMaster"] = relationship(back_populates="variants")
     inventory_level: Mapped[Optional["InventoryLevel"]] = relationship(back_populates="variant", cascade="all, delete-orphan")
     purchase_order_items: Mapped[list["PurchaseOrderItem"]] = relationship(back_populates="variant")
+    lifecycle_state: Mapped[Optional["SkuLifecycleStateModel"]] = relationship(back_populates="variant")
+    lifecycle_transitions: Mapped[list["LifecycleTransitionLog"]] = relationship(back_populates="variant")
 
 
 class Supplier(Base, UpdateTimestampMixin):
@@ -1144,3 +1157,426 @@ class ProfitLedger(Base, UpdateTimestampMixin):
     variant: Mapped["ProductVariant"] = relationship()
     order_line: Mapped[Optional["PlatformOrderLine"]] = relationship()
     listing: Mapped[Optional["PlatformListing"]] = relationship()
+
+
+class PlatformPolicy(Base, UpdateTimestampMixin):
+    """Platform policy configuration (commission, pricing, content, listing rules).
+
+    Supports versioning and time-based activation for policy changes.
+    """
+
+    __tablename__ = "platform_policies"
+    __table_args__ = (
+        Index(
+            "uq_platform_policy_scope_version",
+            "platform",
+            "region",
+            "policy_type",
+            "version",
+            unique=True,
+        ),
+        Index(
+            "idx_platform_policy_active",
+            "platform",
+            "region",
+            "policy_type",
+            "is_active",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    platform: Mapped[TargetPlatform] = mapped_column(
+        SAEnum(TargetPlatform, native_enum=False), nullable=False, index=True
+    )
+    region: Mapped[Optional[str]] = mapped_column(String(10), index=True)
+    policy_type: Mapped[str] = mapped_column(String(50), nullable=False)  # commission/pricing/content/listing
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    effective_from: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    effective_to: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    policy_data: Mapped[dict] = mapped_column(JSON, nullable=False)
+    notes: Mapped[Optional[str]] = mapped_column(Text)
+
+
+class PlatformCategoryMapping(Base, UpdateTimestampMixin):
+    """Platform category mapping from internal categories to platform-specific IDs.
+
+    Supports versioning and multi-region category mappings.
+    """
+
+    __tablename__ = "platform_category_mappings"
+    __table_args__ = (
+        Index(
+            "uq_platform_category_mapping",
+            "platform",
+            "region",
+            "internal_category",
+            "mapping_version",
+            unique=True,
+        ),
+        Index(
+            "idx_platform_category_mapping_active",
+            "platform",
+            "region",
+            "is_active",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    platform: Mapped[TargetPlatform] = mapped_column(
+        SAEnum(TargetPlatform, native_enum=False), nullable=False, index=True
+    )
+    region: Mapped[Optional[str]] = mapped_column(String(10), index=True)
+    internal_category: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    platform_category_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    platform_category_name: Mapped[Optional[str]] = mapped_column(String(255))
+    mapping_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    extra_attributes: Mapped[Optional[dict]] = mapped_column(JSON)
+    notes: Mapped[Optional[str]] = mapped_column(Text)
+
+
+class ExchangeRate(Base, UpdateTimestampMixin):
+    """Exchange rate for currency conversion.
+
+    Stores daily exchange rates for multi-currency operations.
+    """
+
+    __tablename__ = "exchange_rates"
+    __table_args__ = (
+        Index(
+            "uq_exchange_rate_pair_date",
+            "base_currency",
+            "quote_currency",
+            "rate_date",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    base_currency: Mapped[str] = mapped_column(String(3), nullable=False, index=True)
+    quote_currency: Mapped[str] = mapped_column(String(3), nullable=False, index=True)
+    rate: Mapped[Decimal] = mapped_column(DECIMAL(18, 8), nullable=False)
+    rate_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    source: Mapped[Optional[str]] = mapped_column(String(50))
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+
+
+class RegionTaxRule(Base, UpdateTimestampMixin):
+    """Region-specific tax rules (VAT, sales tax, import tax).
+
+    Supports versioning and time-based activation for tax changes.
+    """
+
+    __tablename__ = "region_tax_rules"
+    __table_args__ = (
+        Index(
+            "uq_region_tax_rule",
+            "platform",
+            "region",
+            "tax_type",
+            "version",
+            unique=True,
+        ),
+        Index("idx_region_tax_rule_active", "platform", "region", "is_active"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    platform: Mapped[Optional[TargetPlatform]] = mapped_column(
+        SAEnum(TargetPlatform, native_enum=False), index=True
+    )
+    region: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    tax_type: Mapped[str] = mapped_column(String(50), nullable=False)  # vat/sales_tax/import_tax
+    tax_rate: Mapped[Decimal] = mapped_column(DECIMAL(8, 4), nullable=False)
+    applies_to: Mapped[Optional[dict]] = mapped_column(JSON)  # category/price band/platform scope
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    effective_from: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    effective_to: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    notes: Mapped[Optional[str]] = mapped_column(Text)
+
+
+class RegionRiskRule(Base, UpdateTimestampMixin):
+    """Region-specific risk rules for compliance and operational risk.
+
+    Supports versioning and time-based activation for risk rule changes.
+    """
+
+    __tablename__ = "region_risk_rules"
+    __table_args__ = (
+        Index(
+            "uq_region_risk_rule",
+            "platform",
+            "region",
+            "rule_code",
+            "version",
+            unique=True,
+        ),
+        Index("idx_region_risk_rule_active", "platform", "region", "is_active"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    platform: Mapped[Optional[TargetPlatform]] = mapped_column(
+        SAEnum(TargetPlatform, native_enum=False), index=True
+    )
+    region: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    rule_code: Mapped[str] = mapped_column(String(100), nullable=False)
+    severity: Mapped[str] = mapped_column(String(20), nullable=False, default="medium")
+    rule_data: Mapped[dict] = mapped_column(JSON, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    effective_from: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    effective_to: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    notes: Mapped[Optional[str]] = mapped_column(Text)
+
+
+# ============================================================================
+# Stage 6: Autonomous Operations - Phase 1
+# ============================================================================
+
+
+class SkuLifecycleStateModel(Base, UpdateTimestampMixin):
+    """SKU lifecycle state tracking.
+
+    Tracks the current lifecycle state of each product variant (SKU).
+    """
+
+    __tablename__ = "sku_lifecycle_states"
+    __table_args__ = (Index("uq_sku_lifecycle_state", "product_variant_id", unique=True),)
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    product_variant_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("product_variants.id"), nullable=False, unique=True, index=True
+    )
+
+    # Current state
+    current_state: Mapped[SkuLifecycleState] = mapped_column(
+        SAEnum(SkuLifecycleState, native_enum=False), nullable=False, index=True
+    )
+    entered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    # State metadata
+    state_metadata: Mapped[Optional[dict]] = mapped_column(JSON)  # metrics, thresholds, etc.
+    notes: Mapped[Optional[str]] = mapped_column(Text)
+
+    # Relationships
+    variant: Mapped["ProductVariant"] = relationship()
+
+
+class LifecycleRule(Base, UpdateTimestampMixin):
+    """Lifecycle state transition rules.
+
+    Defines conditions for transitioning between lifecycle states.
+    """
+
+    __tablename__ = "lifecycle_rules"
+    __table_args__ = (
+        Index("uq_lifecycle_rule", "from_state", "to_state", "rule_name", unique=True),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+
+    # Transition definition
+    from_state: Mapped[SkuLifecycleState] = mapped_column(
+        SAEnum(SkuLifecycleState, native_enum=False), nullable=False, index=True
+    )
+    to_state: Mapped[SkuLifecycleState] = mapped_column(
+        SAEnum(SkuLifecycleState, native_enum=False), nullable=False, index=True
+    )
+    rule_name: Mapped[str] = mapped_column(String(100), nullable=False)
+
+    # Rule conditions
+    conditions: Mapped[dict] = mapped_column(JSON, nullable=False)  # threshold definitions
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+
+    # Metadata
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    metadata_: Mapped[Optional[dict]] = mapped_column("metadata", JSON)
+
+
+class LifecycleTransitionLog(Base, TimestampMixin):
+    """Lifecycle state transition audit log.
+
+    Records all state transitions for SKUs.
+    """
+
+    __tablename__ = "lifecycle_transition_logs"
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    product_variant_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("product_variants.id"), nullable=False, index=True
+    )
+
+    # Transition details
+    from_state: Mapped[SkuLifecycleState] = mapped_column(
+        SAEnum(SkuLifecycleState, native_enum=False), nullable=False
+    )
+    to_state: Mapped[SkuLifecycleState] = mapped_column(
+        SAEnum(SkuLifecycleState, native_enum=False), nullable=False
+    )
+    transitioned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    # Trigger information
+    triggered_by: Mapped[str] = mapped_column(String(100), nullable=False)  # "system", "manual", "rule_id"
+    rule_id: Mapped[Optional[UUID]] = mapped_column(PGUUID(as_uuid=True), ForeignKey("lifecycle_rules.id"))
+    trigger_data: Mapped[Optional[dict]] = mapped_column(JSON)  # metrics that triggered transition
+
+    # Relationships
+    variant: Mapped["ProductVariant"] = relationship()
+    rule: Mapped[Optional["LifecycleRule"]] = relationship()
+
+
+class ActionRule(Base, UpdateTimestampMixin):
+    """Auto action rules.
+
+    Defines automated actions to be executed based on conditions.
+    """
+
+    __tablename__ = "action_rules"
+    __table_args__ = (
+        Index("idx_action_rule_active", "is_active", "action_type"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+
+    # Rule identification
+    rule_name: Mapped[str] = mapped_column(String(200), nullable=False, unique=True, index=True)
+    action_type: Mapped[ActionType] = mapped_column(
+        SAEnum(ActionType, native_enum=False), nullable=False, index=True
+    )
+
+    # Trigger conditions
+    trigger_conditions: Mapped[dict] = mapped_column(JSON, nullable=False)  # condition definitions
+    target_scope: Mapped[Optional[dict]] = mapped_column(JSON)  # platform, region, category filters
+
+    # Action parameters
+    action_params: Mapped[dict] = mapped_column(JSON, nullable=False)  # action-specific parameters
+
+    # Rule configuration
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    requires_approval: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    # Metadata
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    metadata_: Mapped[Optional[dict]] = mapped_column("metadata", JSON)
+
+
+class ActionExecutionLog(Base, UpdateTimestampMixin):
+    """Action execution audit log.
+
+    Records all action executions and their results.
+    """
+
+    __tablename__ = "action_execution_logs"
+    __table_args__ = (
+        Index("idx_action_execution_status", "status", "action_type"),
+        Index("idx_action_execution_target", "target_type", "target_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    action_rule_id: Mapped[Optional[UUID]] = mapped_column(
+        PGUUID(as_uuid=True), ForeignKey("action_rules.id"), index=True
+    )
+
+    # Action details
+    action_type: Mapped[ActionType] = mapped_column(
+        SAEnum(ActionType, native_enum=False), nullable=False, index=True
+    )
+    target_type: Mapped[str] = mapped_column(String(50), nullable=False)  # "product_variant", "platform_listing"
+    target_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False, index=True)
+
+    # Execution status
+    status: Mapped[ActionExecutionStatus] = mapped_column(
+        SAEnum(ActionExecutionStatus, native_enum=False), nullable=False, default=ActionExecutionStatus.PENDING, index=True
+    )
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+    # Execution data
+    input_params: Mapped[Optional[dict]] = mapped_column(JSON)
+    output_data: Mapped[Optional[dict]] = mapped_column(JSON)
+    error_message: Mapped[Optional[str]] = mapped_column(Text)
+
+    # Approval tracking
+    approved_by: Mapped[Optional[str]] = mapped_column(String(100))
+    approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+    # Relationships
+    action_rule: Mapped[Optional["ActionRule"]] = relationship()
+
+
+class ManualOverride(Base, UpdateTimestampMixin):
+    """Manual override records.
+
+    Tracks manual interventions that override automated decisions.
+    """
+
+    __tablename__ = "manual_overrides"
+    __table_args__ = (
+        Index("idx_manual_override_target", "target_type", "target_id"),
+        Index("idx_manual_override_active", "is_active", "override_type"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+
+    # Override type
+    override_type: Mapped[OverrideType] = mapped_column(
+        SAEnum(OverrideType, native_enum=False), nullable=False, index=True
+    )
+
+    # Target
+    target_type: Mapped[OverrideTargetType] = mapped_column(
+        SAEnum(OverrideTargetType, native_enum=False), nullable=False, index=True
+    )
+    target_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False, index=True)
+
+    # Override details
+    override_data: Mapped[dict] = mapped_column(JSON, nullable=False)  # override-specific data
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # Validity
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    effective_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    effective_to: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+    # Audit
+    created_by: Mapped[str] = mapped_column(String(100), nullable=False)
+    cancelled_by: Mapped[Optional[str]] = mapped_column(String(100))
+    cancelled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
+class AnomalyDetectionSignal(Base, UpdateTimestampMixin):
+    """Anomaly detection signals.
+
+    Stores detected anomalies for SKUs, listings, and suppliers.
+    """
+
+    __tablename__ = "anomaly_detection_signals"
+    __table_args__ = (
+        Index("idx_anomaly_target", "target_type", "target_id"),
+        Index("idx_anomaly_severity", "severity", "detected_at"),
+        Index("idx_anomaly_resolved", "is_resolved"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+
+    # Target
+    target_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)  # "product_variant", "platform_listing", "supplier"
+    target_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False, index=True)
+
+    # Anomaly details
+    anomaly_type: Mapped[str] = mapped_column(String(100), nullable=False, index=True)  # "sales_drop", "refund_spike", etc.
+    severity: Mapped[str] = mapped_column(String(20), nullable=False, index=True)  # "critical", "high", "medium", "low"
+    detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+    # Anomaly data
+    anomaly_data: Mapped[dict] = mapped_column(JSON, nullable=False)  # metrics, thresholds, etc.
+    description: Mapped[Optional[str]] = mapped_column(Text)
+
+    # Resolution
+    is_resolved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    resolved_by: Mapped[Optional[str]] = mapped_column(String(100))
+    resolution_notes: Mapped[Optional[str]] = mapped_column(Text)

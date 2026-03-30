@@ -19,6 +19,7 @@ const menuItems = [
   { key: '/task-monitor', label: '任务监控' },
   { key: '/analytics', label: '数据看板' },
   { key: '/performance', label: '性能监控' },
+  { key: '/operations', label: '运营控制台' },
 ]
 
 const selectedKeys = computed(() => [String(route.meta.menuKey ?? route.path)])

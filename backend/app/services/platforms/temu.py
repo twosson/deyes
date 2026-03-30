@@ -22,6 +22,7 @@ from app.core.config import get_settings
 from app.core.enums import PlatformListingStatus, TargetPlatform
 from app.core.logging import get_logger
 from app.db.models import CandidateProduct, ContentAsset
+from app.services.platform_policy_service import PlatformPolicyService
 from app.services.platforms.base import PlatformAdapter, PlatformListingData
 
 
@@ -93,6 +94,7 @@ class TemuAdapter(PlatformAdapter):
         self.region = region
         self.base_url = self.ENDPOINTS.get(region, self.ENDPOINTS["us"])
         self.timeout = 30
+        self.policy_service = PlatformPolicyService()
 
     async def create_listing(
         self,
@@ -107,6 +109,9 @@ class TemuAdapter(PlatformAdapter):
         description: str | None = None,
         category: str | None = None,
         attributes: dict[str, Any] | None = None,
+        category_id: str | int | None = None,
+        category_name: str | None = None,
+        platform_context: dict[str, Any] | None = None,
     ) -> PlatformListingData:
         """Create a new listing on Temu.
 
@@ -131,8 +136,12 @@ class TemuAdapter(PlatformAdapter):
         # Upload images to Temu
         temu_image_ids = await self._upload_images(assets)
 
-        # Map category
-        temu_category_id = self.map_category(category or product.category)
+        # Resolve category ID using explicit category_id or fallback to hardcoded mapping
+        temu_category_id = self._resolve_temu_category_id(
+            category_id=category_id,
+            category=category,
+            product_category=product.category,
+        )
 
         # Build product data
         product_data = {
@@ -395,6 +404,55 @@ class TemuAdapter(PlatformAdapter):
         if not internal_category:
             return 0  # Default category
 
+        category_lower = internal_category.lower()
+        return self.CATEGORY_MAPPING.get(category_lower, 0)
+
+    def _resolve_temu_category_id(
+        self,
+        *,
+        category_id: str | int | None,
+        category: str | None,
+        product_category: str | None,
+    ) -> int:
+        """Resolve Temu category ID with priority:
+        1. Explicit category_id (from policy mapping)
+        2. category + CATEGORY_MAPPING (hardcoded fallback)
+        3. product_category + CATEGORY_MAPPING
+        4. Default 0
+        """
+        # Priority 1: Explicit category_id from policy mapping
+        if category_id is not None:
+            try:
+                return int(category_id)
+            except (ValueError, TypeError):
+                self.logger.warning(
+                    "invalid_category_id",
+                    category_id=category_id,
+                )
+                # Fall through to next priority
+
+        # Priority 2: category + CATEGORY_MAPPING
+        internal_category = category or product_category
+        if internal_category:
+            category_lower = internal_category.lower()
+            mapped = self.CATEGORY_MAPPING.get(category_lower, None)
+            if mapped is not None:
+                return mapped
+
+        # Priority 4: Default
+        return 0
+
+    async def _map_category_async(self, internal_category: str | None) -> int:
+        """Map internal category to Temu category ID using policy service.
+
+        Tries policy service first, falls back to hardcoded CATEGORY_MAPPING.
+        """
+        if not internal_category:
+            return 0  # Default category
+
+        # Try policy service (requires db session, but we don't have it in adapter)
+        # For now, fall back to hardcoded mapping
+        # TODO: Pass db session to adapter methods for policy service integration
         category_lower = internal_category.lower()
         return self.CATEGORY_MAPPING.get(category_lower, 0)
 

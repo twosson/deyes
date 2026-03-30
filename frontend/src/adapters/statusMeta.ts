@@ -34,6 +34,45 @@ export const listingStatusMeta: Record<string, { label: string; color: string }>
   delisted: { label: '已下架', color: 'default' },
 }
 
+export const skuLifecycleStateMeta: Record<string, { label: string; color: string }> = {
+  discovering: { label: '探索中', color: 'default' },
+  testing: { label: '测试中', color: 'processing' },
+  scaling: { label: '扩量中', color: 'success' },
+  stable: { label: '稳定期', color: 'cyan' },
+  declining: { label: '下滑中', color: 'warning' },
+  clearance: { label: '清退中', color: 'orange' },
+  retired: { label: '已退场', color: 'default' },
+}
+
+export const actionExecutionStatusMeta: Record<string, { label: string; color: string }> = {
+  pending: { label: '待处理', color: 'gold' },
+  pending_approval: { label: '待审批', color: 'gold' },
+  approved: { label: '已批准', color: 'processing' },
+  rejected: { label: '已拒绝', color: 'error' },
+  deferred: { label: '已延后', color: 'warning' },
+  executing: { label: '执行中', color: 'processing' },
+  completed: { label: '已完成', color: 'success' },
+  failed: { label: '已失败', color: 'error' },
+  cancelled: { label: '已取消', color: 'default' },
+  rolled_back: { label: '已回滚', color: 'purple' },
+}
+
+export const actionTypeMeta: Record<string, { label: string; color: string }> = {
+  repricing: { label: '重新定价', color: 'processing' },
+  replenish: { label: '补货', color: 'success' },
+  swap_content: { label: '切换内容', color: 'cyan' },
+  expand_platform: { label: '扩平台', color: 'purple' },
+  delist: { label: '下架', color: 'warning' },
+  retire: { label: '退场', color: 'default' },
+}
+
+export const anomalySeverityMeta: Record<string, { label: string; color: string }> = {
+  critical: { label: '严重', color: 'error' },
+  high: { label: '高', color: 'volcano' },
+  medium: { label: '中', color: 'warning' },
+  low: { label: '低', color: 'default' },
+}
+
 export const sourcePlatformLabel: Record<string, string> = {
   alibaba_1688: '1688',
   temu: 'Temu',
@@ -75,4 +114,20 @@ export function getSourcePlatformLabel(source?: string | null) {
 
 export function getAssetTypeLabel(assetType?: string | null) {
   return assetTypeLabel[normalizeKey(assetType)] ?? assetType ?? '--'
+}
+
+export function getSkuLifecycleStateMeta(state?: string | null) {
+  return skuLifecycleStateMeta[normalizeKey(state)] ?? { label: state ?? '--', color: 'default' }
+}
+
+export function getActionExecutionStatusMeta(status?: string | null) {
+  return actionExecutionStatusMeta[normalizeKey(status)] ?? { label: status ?? '--', color: 'default' }
+}
+
+export function getActionTypeMeta(actionType?: string | null) {
+  return actionTypeMeta[normalizeKey(actionType)] ?? { label: actionType ?? '--', color: 'default' }
+}
+
+export function getAnomalySeverityMeta(severity?: string | null) {
+  return anomalySeverityMeta[normalizeKey(severity)] ?? { label: severity ?? '--', color: 'default' }
 }

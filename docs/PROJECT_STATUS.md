@@ -1,8 +1,8 @@
 # Deyes 项目状态报告
 
-**最后更新**: 2026-03-29
+**最后更新**: 2026-03-30
 **架构版本**: v4.0
-**项目阶段**: Stage 0-4 完成，Stage 5-6 待实施
+**项目阶段**: Stage 0-5 完成，Stage 6 待实施
 
 ---
 
@@ -20,7 +20,86 @@
 
 ---
 
-## 二、最新交付（2026-03-29）
+## 二、最新交付（2026-03-30）
+
+### Stage 5 多平台统一经营中枢完成 ✅
+
+**核心变更**：
+
+#### A1-A3: PlatformListing 多平台模型 ✅
+- ✅ PlatformListing 模型扩展（`backend/app/db/models.py`）
+  - 新增 `marketplace` 字段支持 Amazon 多 marketplace
+  - 新增 `region` 字段支持区域化
+  - 新增 `platform_listing_id` 唯一性索引（platform + marketplace + platform_listing_id）
+- ✅ PlatformRegistry / PlatformCapability（`backend/app/services/platform_registry.py`）
+  - 平台注册表，支持 Temu/Amazon/Ozon 等
+  - 平台能力检查（CREATE_LISTING, UPDATE_LISTING, SYNC_INVENTORY 等）
+  - Adapter 缓存
+- ✅ UnifiedListingService（`backend/app/services/unified_listing_service.py`）
+  - 统一 listing 创建接口
+  - 跨平台 listing 查询
+  - Listing 快照
+- ✅ 数据库迁移 013_platform_listing_multiplatform
+
+#### B1-C4: PlatformPolicy + CurrencyConverter + RegionTax/RegionRisk ✅
+- ✅ PlatformPolicy / PlatformCategoryMapping 模型（`backend/app/db/models.py`）
+- ✅ RegionTaxRule / RegionRiskRule 模型（`backend/app/db/models.py`）
+- ✅ ExchangeRate 模型（`backend/app/db/models.py`）
+- ✅ PlatformPolicyService（`backend/app/services/platform_policy_service.py`）
+  - Category mapping 查询
+  - Commission/CommissionPolicy 配置
+  - Tax rules 和 risk rules 查询
+- ✅ CurrencyConverter（`backend/app/services/currency_converter.py`）
+  - 多币种转换
+  - 汇率缓存
+  - 批量转换支持
+- ✅ OperatingMetricsService 增强（`backend/app/services/operating_metrics_service.py`）
+  - get_sku_multiplatform_snapshot() 跨平台聚合
+  - get_region_performance() 区域级别聚合
+  - get_platform_region_snapshot() 平台-区域级别快照
+- ✅ PricingService 策略集成（`backend/app/services/pricing_service.py`）
+  - calculate_pricing_with_policy() 策略感知定价
+  - calculate_regionalized_pricing() 地区化定价
+  - get_regionalized_profit_snapshot() 区域化利润换算
+- ✅ 数据库迁移 014_platform_policy_schema
+
+#### D1-D4: 本地化 + 资产选择 + 统一 listing ✅
+- ✅ LocalizationService 增强（`backend/app/services/localization_service.py`）
+  - ListingDraft 优先于 LocalizationContent
+  - 语言推断（region → language）
+  - 多级 fallback 链
+- ✅ PlatformAssetAdapter（`backend/app/services/platform_asset_adapter.py`）
+  - 素材选择优先级：LOCALIZED > PLATFORM_DERIVED > BASE
+  - 素材合规性验证
+- ✅ PlatformPublisherAgent 重构（`backend/app/agents/platform_publisher.py`）
+  - 使用 UnifiedListingService.create_listing() 统一 listing 创建
+  - 保留本地化、资产选择功能
+
+#### E1-E2: 集成测试 ✅
+- ✅ test_unified_listing_policy_integration.py
+- ✅ test_platform_adapter_compatibility.py
+- ✅ test_currency_converter_integration.py
+- ✅ test_region_tax_integration.py
+- ✅ test_region_risk_integration.py
+- ✅ test_operating_metrics_region_aggregation.py
+
+**影响范围**：
+- 多平台 listing 统一管理（Temu/Amazon/Ozon）
+- 区域化定价和利润换算
+- 策略驱动的 category mapping 和 commission
+- 跨平台经营聚合视图
+
+**测试状态**：
+- ✅ Stage 5 回归测试：140 passed (100%)
+
+**文档**：
+- `docs/STAGE5_BATCH1_IMPLEMENTATION.md` - Batch 1 实施总结
+- `docs/STAGE5_BATCH3_SUMMARY.md` - Batch 3 实施总结
+- `docs/STAGE5_E1_E2_COMPLETION.md` - E1/E2 测试补全总结
+- `docs/STAGE5_A4_C4_COMPLETION.md` - A4/C4 区域聚合实施总结
+- `docs/STAGE5_D4_COMPLETION.md` - D4 重构实施总结
+
+---
 
 ### Stage 3 双模式发布完成 ✅
 
@@ -348,16 +427,16 @@
 ### 4.1 Stage 5 多平台统一经营中枢
 
 **多平台适配与统一 listing 管理**
-- ⏳ 扩展 PlatformListing 支持多平台统一状态管理
-- ⏳ 实现 PlatformRegistry / AdapterResolver
-- ⏳ 实现 UnifiedListingService
-- ⏳ 建立跨平台 SKU 经营视图
+- ✅ 扩展 PlatformListing 支持多平台统一状态管理
+- ✅ 实现 PlatformRegistry / AdapterResolver
+- ✅ 实现 UnifiedListingService
+- ✅ 建立跨平台 SKU 经营视图
 
 **平台策略层与规则配置**
-- ⏳ PlatformPolicy / PlatformCategoryMapping Schema
-- ⏳ PricingRule / ContentRule 策略层
-- ⏳ 多币种与地区化能力
-- ⏳ 多语言 / 本地化内容基础设施
+- ✅ PlatformPolicy / PlatformCategoryMapping Schema
+- ✅ PricingRule / ContentRule 策略层
+- ✅ 多币种与地区化能力
+- ✅ 多语言 / 本地化内容基础设施
 
 ### 4.2 Stage 6 自动化经营控制平面
 

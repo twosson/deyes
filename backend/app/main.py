@@ -15,6 +15,7 @@ from app.api import (
     routes_platform_listings,
     routes_products,
     routes_recommendations,
+    routes_operations,
 )
 from app.core.config import get_settings
 from app.core.logging import configure_logging, get_logger
@@ -67,6 +68,9 @@ app.include_router(routes_recommendations.router, prefix=settings.api_prefix, ta
 
 # Auto Actions (2026-03-27)
 app.include_router(routes_auto_actions.router, prefix=settings.api_prefix, tags=["auto-actions"])
+
+# Stage 6 Phase 3: Operations Control Plane (2026-03-30)
+app.include_router(routes_operations.router, prefix=settings.api_prefix, tags=["operations"])
 
 
 @app.get("/")

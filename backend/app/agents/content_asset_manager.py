@@ -592,6 +592,8 @@ class ContentAssetManagerAgent(BaseAgent):
         db,
     ) -> ContentAsset | None:
         """Find the best BASE asset for a variant and asset type."""
+        from sqlalchemy import select
+
         stmt = select(ContentAsset).where(
             ContentAsset.product_variant_id == variant_id,
             ContentAsset.asset_type == asset_type,
@@ -630,6 +632,8 @@ class ContentAssetManagerAgent(BaseAgent):
         db,
     ) -> ContentAsset | None:
         """Find an existing platform-derived asset for the given base asset."""
+        from sqlalchemy import select
+
         stmt = select(ContentAsset).where(
             ContentAsset.parent_asset_id == base_asset_id,
             ContentAsset.usage_scope == ContentUsageScope.PLATFORM_DERIVED,

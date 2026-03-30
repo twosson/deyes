@@ -10,7 +10,11 @@ _ADAPTER_CACHE: dict[str, PlatformAdapter] = {}
 
 
 def get_platform_adapter(platform: TargetPlatform | str, region: str) -> PlatformAdapter:
-    """Resolve and cache a platform adapter for the given platform/region pair."""
+    """Resolve and cache a platform adapter for the given platform/region pair.
+
+    Backward-compatible function that uses the centralized platform registry
+    when available, but falls back to direct resolution to avoid circular imports.
+    """
     platform_enum = platform if isinstance(platform, TargetPlatform) else TargetPlatform(platform)
     settings = get_settings()
     cache_suffix = "mock" if platform_enum == TargetPlatform.TEMU and settings.temu_use_mock else "live"

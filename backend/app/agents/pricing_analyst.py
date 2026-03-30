@@ -1,4 +1,5 @@
 """Pricing Analyst Agent."""
+from typing import Optional
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
@@ -7,15 +8,21 @@ from sqlalchemy.orm import selectinload
 from app.agents.base.agent import AgentContext, AgentResult, BaseAgent
 from app.core.enums import CandidateStatus
 from app.db.models import CandidateProduct, PricingAssessment
+from app.services.platform_policy_service import PlatformPolicyService
 from app.services.pricing_service import PricingService, SupplierPathInput
 
 
 class PricingAnalystAgent(BaseAgent):
     """Agent for calculating profit margins and pricing."""
 
-    def __init__(self, pricing_service: PricingService = None):
+    def __init__(
+        self,
+        pricing_service: Optional[PricingService] = None,
+        policy_service: Optional[PlatformPolicyService] = None,
+    ):
         super().__init__("pricing_analyst")
         self.pricing_service = pricing_service or PricingService()
+        self.policy_service = policy_service or PlatformPolicyService()
 
     async def execute(self, context: AgentContext) -> AgentResult:
         """Execute pricing analysis."""
@@ -95,15 +102,36 @@ class PricingAnalystAgent(BaseAgent):
                 # Calculate pricing using selected supplier
                 normalized_attributes = candidate.normalized_attributes or {}
                 demand_discovery_metadata = candidate.demand_discovery_metadata or {}
-                pricing_result = self.pricing_service.calculate_pricing(
-                    supplier_price=selection_result.selected_path.supplier_price,
-                    platform_price=candidate.platform_price,
-                    platform=candidate.source_platform.value if candidate.source_platform else None,
-                    category=candidate.category,
-                    competition_density=normalized_attributes.get("competition_density"),
-                    discovery_mode=demand_discovery_metadata.get("discovery_mode"),
-                    degraded=bool(demand_discovery_metadata.get("degraded", False)),
-                )
+
+                # Prefer policy-aware pricing when source platform is available
+                if candidate.source_platform:
+                    # Region can be extracted from normalized attributes or raw payload if available
+                    region = normalized_attributes.get("region")
+                    if not region and candidate.raw_payload:
+                        region = candidate.raw_payload.get("region")
+
+                    pricing_result = await self.pricing_service.calculate_pricing_with_policy(
+                        db=context.db,
+                        supplier_price=selection_result.selected_path.supplier_price,
+                        platform_price=candidate.platform_price,
+                        platform=candidate.source_platform.value,
+                        region=region,
+                        category=candidate.category,
+                        competition_density=normalized_attributes.get("competition_density"),
+                        discovery_mode=demand_discovery_metadata.get("discovery_mode"),
+                        degraded=bool(demand_discovery_metadata.get("degraded", False)),
+                    )
+                else:
+                    # Fallback to existing synchronous method
+                    pricing_result = self.pricing_service.calculate_pricing(
+                        supplier_price=selection_result.selected_path.supplier_price,
+                        platform_price=candidate.platform_price,
+                        platform=None,
+                        category=candidate.category,
+                        competition_density=normalized_attributes.get("competition_density"),
+                        discovery_mode=demand_discovery_metadata.get("discovery_mode"),
+                        degraded=bool(demand_discovery_metadata.get("degraded", False)),
+                    )
 
                 # Build explanation with supplier selection details
                 explanation = pricing_result.to_dict()["explanation"]

@@ -9,7 +9,7 @@ This agent is responsible for:
 """
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
@@ -17,11 +17,14 @@ from uuid import UUID, uuid4
 from sqlalchemy import select
 
 from app.agents.base.agent import AgentContext, AgentResult, BaseAgent
-from app.core.enums import AssetType, ContentUsageScope, InventoryMode, PlatformListingStatus, ProductLifecycle, TargetPlatform
-from app.db.models import CandidateProduct, ContentAsset, ListingAssetAssociation, PlatformListing, ProductVariant
+from app.core.enums import AssetType, ContentUsageScope, InventoryMode, LocalizationType, PlatformListingStatus, ProductLifecycle, TargetPlatform
+from app.db.models import CandidateProduct, ContentAsset, ListingAssetAssociation, ListingDraft, PlatformListing, ProductVariant
 from app.services.listing_metrics_service import ListingMetricsService
+from app.services.localization_service import LocalizationService
 from app.services.platform_sync_service import PlatformSyncService
+from app.services.platform_policy_service import PlatformPolicyService
 from app.services.platforms import PlatformAdapter, get_platform_adapter
+from app.services.unified_listing_service import UnifiedListingService
 
 
 class PlatformPublisherAgent(BaseAgent):
@@ -76,6 +79,9 @@ class PlatformPublisherAgent(BaseAgent):
 
     def __init__(self):
         super().__init__("platform_publisher")
+        self.platform_policy_service = PlatformPolicyService()
+        self.localization_service = LocalizationService()
+        self.unified_listing_service = UnifiedListingService()
 
     async def execute(self, context: AgentContext) -> AgentResult:
         """Execute platform publishing.
@@ -177,6 +183,135 @@ class PlatformPublisherAgent(BaseAgent):
         except Exception as e:
             return await self._handle_error(e, context)
 
+    async def _get_localized_content(
+        self,
+        *,
+        candidate: CandidateProduct,
+        variant_id: UUID | None,
+        language: str,
+        db,
+    ) -> tuple[str | None, str | None]:
+        """Get localized title and description for platform listing.
+
+        Priority:
+        1. ListingDraft for target language
+        2. LocalizationContent for variant (if variant_id exists)
+        3. Fall back to candidate.title
+
+        Returns:
+            (title, description) tuple
+        """
+        # Try ListingDraft first
+        stmt = select(ListingDraft).where(
+            ListingDraft.candidate_product_id == candidate.id,
+            ListingDraft.language == language,
+            ListingDraft.status == "approved",
+        )
+        result = await db.execute(stmt)
+        draft = result.scalar_one_or_none()
+
+        if draft:
+            self.logger.info(
+                "using_listing_draft_localization",
+                candidate_id=str(candidate.id),
+                language=language,
+                draft_id=str(draft.id),
+            )
+            return (draft.title, draft.description)
+
+        # Try LocalizationContent if variant exists
+        if variant_id:
+            title_loc = await self.localization_service.get_localization(
+                variant_id=variant_id,
+                language=language,
+                content_type=LocalizationType.TITLE,
+                db=db,
+            )
+            desc_loc = await self.localization_service.get_localization(
+                variant_id=variant_id,
+                language=language,
+                content_type=LocalizationType.DESCRIPTION,
+                db=db,
+            )
+
+            if title_loc or desc_loc:
+                title = title_loc.content.get("text") if title_loc else None
+                description = desc_loc.content.get("text") if desc_loc else None
+
+                self.logger.info(
+                    "using_localization_content",
+                    candidate_id=str(candidate.id),
+                    variant_id=str(variant_id),
+                    language=language,
+                    has_title=bool(title),
+                    has_description=bool(description),
+                )
+
+                # Fall back to candidate.title if no title localization
+                return (title or candidate.title, description)
+
+        # Try fallback to English if target language not found
+        if language != "en":
+            self.logger.info(
+                "trying_english_fallback",
+                candidate_id=str(candidate.id),
+                original_language=language,
+            )
+
+            # Try English ListingDraft
+            stmt = select(ListingDraft).where(
+                ListingDraft.candidate_product_id == candidate.id,
+                ListingDraft.language == "en",
+                ListingDraft.status == "approved",
+            )
+            result = await db.execute(stmt)
+            draft = result.scalar_one_or_none()
+
+            if draft:
+                self.logger.info(
+                    "using_english_listing_draft_fallback",
+                    candidate_id=str(candidate.id),
+                    draft_id=str(draft.id),
+                )
+                return (draft.title, draft.description)
+
+            # Try English LocalizationContent
+            if variant_id:
+                title_loc = await self.localization_service.get_localization(
+                    variant_id=variant_id,
+                    language="en",
+                    content_type=LocalizationType.TITLE,
+                    db=db,
+                )
+                desc_loc = await self.localization_service.get_localization(
+                    variant_id=variant_id,
+                    language="en",
+                    content_type=LocalizationType.DESCRIPTION,
+                    db=db,
+                )
+
+                if title_loc or desc_loc:
+                    title = title_loc.content.get("text") if title_loc else None
+                    description = desc_loc.content.get("text") if desc_loc else None
+
+                    self.logger.info(
+                        "using_english_localization_fallback",
+                        candidate_id=str(candidate.id),
+                        variant_id=str(variant_id),
+                        has_title=bool(title),
+                        has_description=bool(description),
+                    )
+
+                    return (title or candidate.title, description)
+
+        # Final fallback to candidate.title
+        self.logger.info(
+            "using_candidate_title_fallback",
+            candidate_id=str(candidate.id),
+            language=language,
+        )
+        return (candidate.title, None)
+
     async def _publish_to_platform(
         self,
         *,
@@ -189,6 +324,7 @@ class PlatformPublisherAgent(BaseAgent):
         """Publish product to a single platform."""
         platform_name = platform_config.get("platform")
         region = platform_config.get("region", "us")
+        marketplace = platform_config.get("marketplace")
 
         self.logger.info(
             "publishing_to_platform",
@@ -197,11 +333,9 @@ class PlatformPublisherAgent(BaseAgent):
             product_id=str(candidate.id),
         )
 
-        # Get platform adapter
-        adapter = self._get_adapter(platform_name, region)
-
         # Calculate price
-        price, currency = self._calculate_price(
+        price, currency = await self._calculate_price(
+            context=context,
             candidate=candidate,
             platform=TargetPlatform(platform_name),
             region=region,
@@ -230,67 +364,37 @@ class PlatformPublisherAgent(BaseAgent):
         if not platform_assets:
             raise ValueError(f"No compliant assets available for platform {platform_name}")
 
-        # Create listing on platform
-        listing_data = await adapter.create_listing(
-            product=candidate,
-            assets=platform_assets,
-            region=region,
-            price=price,
-            currency=currency,
-            inventory=inventory,
-            title=candidate.title,
-            description=None,  # TODO: Get from ListingDraft
-            category=candidate.category,
+        # Get localized content
+        language = self._infer_language_from_region(region)
+        title, description = await self._get_localized_content(
+            candidate=candidate,
+            variant_id=variant_id,
+            language=language,
+            db=context.db,
         )
 
-        # Create PlatformListing record with PENDING status initially
-        listing = PlatformListing(
-            id=uuid4(),
-            candidate_product_id=candidate.id,
-            product_variant_id=variant_id,
-            inventory_mode=inventory_mode,
+        # Use UnifiedListingService to create listing (handles adapter call,
+        # PlatformListing creation, and activation service)
+        listing = await self.unified_listing_service.create_listing(
+            db=context.db,
             platform=TargetPlatform(platform_name),
             region=region,
-            platform_listing_id=listing_data.platform_listing_id,
-            platform_url=listing_data.platform_url,
-            price=price,
-            currency=currency,
-            inventory=inventory,
-            status=PlatformListingStatus.PENDING,  # Start as PENDING, activation service will update
-            platform_data=listing_data.platform_data,
+            marketplace=marketplace,
+            product_variant_id=variant_id,
+            candidate_product_id=candidate.id,
+            payload={
+                "price": price,
+                "currency": currency,
+                "inventory": inventory,
+                "title": title,
+                "description": description,
+                "category": candidate.category,
+                "assets": platform_assets,
+                "inventory_mode": inventory_mode,
+            },
         )
 
-        context.db.add(listing)
-        await context.db.flush()
-
-        # Check activation eligibility and activate if eligible
-        from app.services.listing_activation_service import ListingActivationService
-
-        activation_service = ListingActivationService()
-        activated, reason = await activation_service.activate_listing_if_eligible(
-            db=context.db,
-            listing_id=listing.id,
-        )
-
-        if activated:
-            self.logger.info(
-                "listing_activated_on_creation",
-                listing_id=str(listing.id),
-                platform=platform_name,
-                region=region,
-                inventory_mode=inventory_mode.value if inventory_mode else None,
-            )
-        else:
-            self.logger.warning(
-                "listing_activation_deferred",
-                listing_id=str(listing.id),
-                platform=platform_name,
-                region=region,
-                inventory_mode=inventory_mode.value if inventory_mode else None,
-                reason=reason,
-            )
-
-        # Create asset associations
+        # Create asset associations (UnifiedListingService does not handle this)
         for i, asset in enumerate(platform_assets):
             association = ListingAssetAssociation(
                 listing_id=listing.id,
@@ -309,7 +413,7 @@ class PlatformPublisherAgent(BaseAgent):
             listing_id=str(listing.id),
             platform=platform_name,
             region=region,
-            platform_listing_id=listing_data.platform_listing_id,
+            platform_listing_id=listing.platform_listing_id,
             price=str(price),
         )
 
@@ -319,9 +423,10 @@ class PlatformPublisherAgent(BaseAgent):
         """Get platform adapter using shared resolution logic."""
         return get_platform_adapter(platform, region)
 
-    def _calculate_price(
+    async def _calculate_price(
         self,
         *,
+        context: AgentContext,
         candidate: CandidateProduct,
         platform: TargetPlatform,
         region: str,
@@ -340,13 +445,18 @@ class PlatformPublisherAgent(BaseAgent):
         markup = strategy_params["markup"]
         min_margin = strategy_params["min_margin"]
 
-        # Get commission rate
-        commission_rate = self.COMMISSION_RATES.get(platform, Decimal("0.10"))
+        # Get commission config from policy service with fallback
+        commission_config = await self.platform_policy_service.get_commission_config(
+            db=context.db,
+            platform=platform,
+            region=region,
+        )
+        commission_rate = Decimal(str(commission_config.get("commission_rate", 0.10)))
+        payment_fee_rate = Decimal(str(commission_config.get("payment_fee_rate", 0.02)))
+        return_rate = Decimal(str(commission_config.get("return_rate_assumption", 0.05)))
 
         # Calculate costs
         shipping_rate = Decimal("0.15")  # 15% shipping
-        payment_fee_rate = Decimal("0.02")  # 2% payment fee
-        return_rate = Decimal("0.05")  # 5% return cost
 
         # Calculate price
         total_cost = cost * (1 + shipping_rate)
@@ -799,7 +909,7 @@ class PlatformSyncAgent(BaseAgent):
                     else:
                         raise ValueError(f"Unsupported sync_type: {sync_type}")
 
-                    listing.last_synced_at = datetime.now(UTC)
+                    listing.last_synced_at = datetime.now(timezone.utc)
                     listing.sync_error = None
                     synced_count += 1
                 except Exception as e:

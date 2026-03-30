@@ -1,6 +1,7 @@
 """Tests for browser pool concurrency, cleanup, health, and stats."""
 import asyncio
 import time
+from typing import Optional
 
 import pytest
 
@@ -20,7 +21,7 @@ class FakePage:
 class FakeContext:
     """Minimal fake Playwright context."""
 
-    def __init__(self, *, new_page_error: Exception | None = None):
+    def __init__(self, *, new_page_error: Optional[Exception] = None):
         self.new_page_error = new_page_error
         self.close_calls = 0
         self.init_scripts: list[str] = []

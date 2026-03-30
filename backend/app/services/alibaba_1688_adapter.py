@@ -11,7 +11,7 @@ moving business strategy into a TMAPI-oriented, selection-focused orchestration 
 """
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 import re
 import unicodedata
 from dataclasses import dataclass, field
@@ -413,7 +413,7 @@ class Alibaba1688Adapter(SourceAdapter):
 
     def _get_current_season(self) -> str:
         """Return the current season for seed generation."""
-        month = datetime.now(UTC).month
+        month = datetime.now(timezone.utc).month
         if month in {3, 4, 5}:
             return "spring"
         if month in {6, 7, 8}:

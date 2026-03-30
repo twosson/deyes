@@ -1,7 +1,7 @@
 """Experiment service for A/B testing content asset variants."""
 from __future__ import annotations
 
-from datetime import UTC, datetime, date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from uuid import UUID, uuid4
 
@@ -221,7 +221,7 @@ class ExperimentService:
         winner_variant_group = winner["variant_group"]
 
         experiment.winner_variant_group = winner_variant_group
-        experiment.winner_selected_at = datetime.now(UTC)
+        experiment.winner_selected_at = datetime.now(timezone.utc)
         experiment.status = ExperimentStatus.COMPLETED
         await db.flush()
 
@@ -248,7 +248,7 @@ class ExperimentService:
             raise ValueError(f"Variant group not found in experiment: {winner_variant_group}")
 
         experiment.winner_variant_group = winner_variant_group
-        experiment.winner_selected_at = datetime.now(UTC)
+        experiment.winner_selected_at = datetime.now(timezone.utc)
         experiment.status = ExperimentStatus.COMPLETED
         await db.flush()
 

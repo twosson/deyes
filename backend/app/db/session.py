@@ -1,4 +1,5 @@
 """Database session management."""
+import os
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
@@ -11,19 +12,24 @@ settings = get_settings()
 # Convert postgresql:// to postgresql+asyncpg://
 async_database_url = settings.database_url.replace("postgresql://", "postgresql+asyncpg://")
 
-engine = create_async_engine(
-    async_database_url,
-    echo=settings.environment == "development",
-    pool_pre_ping=True,
-    pool_size=10,
-    max_overflow=20,
-)
+# Skip engine creation in test mode to avoid asyncpg dependency
+if os.getenv("PYTEST_CURRENT_TEST"):
+    engine = None  # type: ignore
+    AsyncSessionLocal = None  # type: ignore
+else:
+    engine = create_async_engine(
+        async_database_url,
+        echo=settings.environment == "development",
+        pool_pre_ping=True,
+        pool_size=10,
+        max_overflow=20,
+    )
 
-AsyncSessionLocal = async_sessionmaker(
-    engine,
-    class_=AsyncSession,
-    expire_on_commit=False,
-)
+    AsyncSessionLocal = async_sessionmaker(
+        engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+    )
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:

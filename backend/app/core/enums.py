@@ -265,3 +265,59 @@ class RefundStatus(str, Enum):
     APPROVED = "approved"
     REJECTED = "rejected"
     COMPLETED = "completed"
+
+
+# ============================================================================
+# Stage 6: Autonomous Operations - Phase 1
+# ============================================================================
+
+
+class SkuLifecycleState(str, Enum):
+    """SKU lifecycle state."""
+    DISCOVERING = "discovering"
+    TESTING = "testing"
+    SCALING = "scaling"
+    STABLE = "stable"
+    DECLINING = "declining"
+    CLEARANCE = "clearance"
+    RETIRED = "retired"
+
+
+class ActionType(str, Enum):
+    """Auto action type."""
+    REPRICING = "repricing"
+    REPLENISH = "replenish"
+    SWAP_CONTENT = "swap_content"
+    EXPAND_PLATFORM = "expand_platform"
+    DELIST = "delist"
+    RETIRE = "retire"
+
+
+class ActionExecutionStatus(str, Enum):
+    """Action execution status."""
+    PENDING = "pending"
+    PENDING_APPROVAL = "pending_approval"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    DEFERRED = "deferred"
+    EXECUTING = "executing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    ROLLED_BACK = "rolled_back"
+
+
+class OverrideType(str, Enum):
+    """Manual override type."""
+    LIFECYCLE_STATE_OVERRIDE = "lifecycle_state_override"
+    ACTION_SKIP = "action_skip"
+    ACTION_FORCE_EXECUTE = "action_force_execute"
+    STRATEGY_FREEZE = "strategy_freeze"
+
+
+class OverrideTargetType(str, Enum):
+    """Manual override target type."""
+    PRODUCT_VARIANT = "product_variant"
+    PLATFORM_LISTING = "platform_listing"
+    SUPPLIER = "supplier"
+    PLATFORM = "platform"

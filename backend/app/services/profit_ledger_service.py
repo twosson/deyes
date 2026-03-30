@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 from uuid import UUID, uuid4
 
 from sqlalchemy import and_, func, select
@@ -574,4 +574,196 @@ class ProfitLedgerService:
             "total_fulfillment_cost": float(total_fulfillment_cost),
             "total_net_profit": float(total_net_profit),
             "overall_margin": float(overall_margin) if overall_margin else None,
+        }
+
+    async def get_profit_snapshot_in_currency(
+        self,
+        db: AsyncSession,
+        *,
+        target_currency: str,
+        source_currency: str = "USD",
+        product_variant_id: Optional[UUID] = None,
+        listing_id: Optional[UUID] = None,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+    ) -> dict[str, Any]:
+        """Get profit snapshot converted to target currency.
+
+        Wraps get_profit_snapshot() and converts monetary fields when currencies differ.
+        Falls back to original values if exchange rate is unavailable.
+        """
+        from app.services.currency_converter import CurrencyConverter
+
+        snapshot = await self.get_profit_snapshot(
+            db=db,
+            product_variant_id=product_variant_id,
+            listing_id=listing_id,
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+        if source_currency == target_currency:
+            converted_snapshot = snapshot.copy()
+            converted_snapshot["currency"] = target_currency
+            converted_snapshot["source_currency"] = source_currency
+            converted_snapshot["conversion_applied"] = False
+            return converted_snapshot
+
+        currency_converter = CurrencyConverter()
+        monetary_fields = [
+            "total_gross_revenue",
+            "total_platform_fee",
+            "total_refund_loss",
+            "total_ad_cost",
+            "total_fulfillment_cost",
+            "total_net_profit",
+        ]
+
+        converted_snapshot = snapshot.copy()
+        try:
+            for field in monetary_fields:
+                if converted_snapshot.get(field) is not None:
+                    converted_value = await currency_converter.convert_amount(
+                        db=db,
+                        amount=Decimal(str(converted_snapshot[field])),
+                        from_currency=source_currency,
+                        to_currency=target_currency,
+                    )
+                    converted_snapshot[field] = float(converted_value)
+        except ValueError as e:
+            self.logger.warning(
+                "profit_snapshot_currency_conversion_failed",
+                source_currency=source_currency,
+                target_currency=target_currency,
+                error=str(e),
+            )
+
+        converted_snapshot["currency"] = target_currency
+        converted_snapshot["source_currency"] = source_currency
+        converted_snapshot["conversion_applied"] = source_currency != target_currency
+        return converted_snapshot
+
+    async def get_regionalized_profit_snapshot(
+        self,
+        db: AsyncSession,
+        *,
+        platform: TargetPlatform,
+        region: str,
+        base_currency: str = "USD",
+        local_currency: str = "USD",
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+    ) -> dict[str, Any]:
+        """Get platform-region profit snapshot with tax and risk context.
+
+        Args:
+            db: Database session
+            platform: Target platform
+            region: Region code
+            base_currency: Base currency for conversion (default: USD)
+            local_currency: Local currency of the region (default: USD)
+            start_date: Filter by start date
+            end_date: Filter by end date
+
+        Returns:
+            Dict with platform-region profit snapshot, tax estimate, and risk notes
+        """
+        from app.services.currency_converter import CurrencyConverter
+        from app.services.platform_policy_service import PlatformPolicyService
+
+        # Get platform-region profitability (already filtered)
+        snapshot = await self.get_platform_profitability(
+            db=db,
+            platform=platform,
+            region=region,
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+        # Convert monetary fields if currencies differ
+        if local_currency != base_currency:
+            currency_converter = CurrencyConverter()
+            monetary_fields = [
+                "total_gross_revenue",
+                "total_platform_fee",
+                "total_refund_loss",
+                "total_ad_cost",
+                "total_fulfillment_cost",
+                "total_net_profit",
+            ]
+
+            converted_snapshot = {}
+            try:
+                for field in monetary_fields:
+                    if snapshot.get(field) is not None:
+                        converted_value = await currency_converter.convert_amount(
+                            db=db,
+                            amount=Decimal(str(snapshot[field])),
+                            from_currency=local_currency,
+                            to_currency=base_currency,
+                        )
+                        converted_snapshot[field] = float(converted_value)
+            except ValueError as e:
+                self.logger.warning(
+                    "profit_snapshot_currency_conversion_failed",
+                    platform=platform.value,
+                    region=region,
+                    source_currency=local_currency,
+                    target_currency=base_currency,
+                    error=str(e),
+                )
+                converted_snapshot = {field: snapshot.get(field) for field in monetary_fields}
+
+            converted_snapshot["currency"] = base_currency
+            converted_snapshot["source_currency"] = local_currency
+            converted_snapshot["conversion_applied"] = True
+        else:
+            converted_snapshot = {
+                field: snapshot.get(field)
+                for field in [
+                    "total_gross_revenue",
+                    "total_platform_fee",
+                    "total_refund_loss",
+                    "total_ad_cost",
+                    "total_fulfillment_cost",
+                    "total_net_profit",
+                ]
+            }
+            converted_snapshot["currency"] = base_currency
+            converted_snapshot["source_currency"] = local_currency
+            converted_snapshot["conversion_applied"] = False
+
+        # Get tax and risk rules
+        policy_service = PlatformPolicyService()
+        tax_rules = await policy_service.get_tax_rules(
+            db=db,
+            platform=platform,
+            region=region,
+        )
+        risk_rules = await policy_service.get_risk_rules(
+            db=db,
+            platform=platform,
+            region=region,
+        )
+
+        # Calculate tax estimate
+        tax_estimate = Decimal("0.00")
+        gross_revenue = Decimal(str(snapshot.get("total_gross_revenue", 0)))
+        for rule in tax_rules:
+            tax_estimate += gross_revenue * rule.tax_rate
+
+        return {
+            **snapshot,
+            "base_currency_snapshot": converted_snapshot,
+            "tax_estimate": float(tax_estimate),
+            "tax_rule_count": len(tax_rules),
+            "risk_notes": [
+                {
+                    "rule_code": rule.rule_code,
+                    "severity": rule.severity,
+                    "rule_data": rule.rule_data,
+                    "notes": rule.notes,
+                }
+                for rule in risk_rules
+            ],
         }

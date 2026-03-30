@@ -22,8 +22,8 @@ class SupplierMatch:
         supplier_name: str,
         supplier_url: str,
         supplier_sku: str,
-        supplier_price: Decimal | None,
-        moq: int | None,
+        supplier_price: Optional[Decimal],
+        moq: Optional[int],
         confidence_score: Decimal,
         raw_payload: Optional[dict] = None,
     ):
@@ -193,7 +193,7 @@ class SupplierMatcherService:
             )
         return suppliers
 
-    def _coerce_decimal(self, value) -> Decimal | None:
+    def _coerce_decimal(self, value) -> Optional[Decimal]:
         """Convert supplier numeric fields to Decimal when possible."""
         if value is None or value == "":
             return None

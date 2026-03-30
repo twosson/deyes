@@ -1,7 +1,7 @@
 """Add marketplace field and multi-platform indexes to platform_listings.
 
 Revision ID: 013
-Revises: 012
+Revises: 012_phase4_orders_profit
 Create Date: 2026-03-29
 """
 from typing import Sequence, Union
@@ -13,7 +13,7 @@ from sqlalchemy.dialects.postgresql import UUID
 
 # revision identifiers
 revision: str = "013"
-down_revision: Union[str, None] = "012"
+down_revision: Union[str, None] = "012_phase4_orders_profit"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

@@ -573,6 +573,7 @@ class PlatformPublisherAgent(BaseAgent):
 
         return AgentResult(
             success=False,
+            output_data={},
             error_message=str(error),
         )
 

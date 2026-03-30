@@ -435,3 +435,197 @@ async def test_resolve_variant_id_not_found(db_session: AsyncSession):
     resolved_id = await agent._resolve_variant_id(candidate, db_session)
 
     assert resolved_id is None
+
+
+@pytest.mark.asyncio
+async def test_publisher_rejects_approved_status_without_auto_approve(
+    db_session: AsyncSession,
+):
+    """Publisher should reject candidates with APPROVED status when auto_approve=False."""
+    strategy_run = StrategyRun(
+        id=uuid4(),
+        trigger_type=TriggerType.API,
+        source_platform=SourcePlatform.ALIBABA_1688,
+        status=StrategyRunStatus.QUEUED,
+        max_candidates=5,
+    )
+    db_session.add(strategy_run)
+    await db_session.flush()
+
+    # Create candidate with APPROVED status (not READY_TO_PUBLISH)
+    candidate = CandidateProduct(
+        id=uuid4(),
+        strategy_run_id=strategy_run.id,
+        source_platform=SourcePlatform.ALIBABA_1688,
+        title="Test Product",
+        status=CandidateStatus.DISCOVERED,
+        lifecycle_status=ProductLifecycle.APPROVED,
+        platform_price=Decimal("10.00"),
+    )
+    db_session.add(candidate)
+    await db_session.flush()
+
+    master = ProductMaster(
+        id=uuid4(),
+        candidate_product_id=candidate.id,
+        internal_sku="SKU-TEST-APPROVED",
+        name="Test Product",
+        status=ProductMasterStatus.ACTIVE,
+    )
+    db_session.add(master)
+    await db_session.flush()
+
+    variant = ProductVariant(
+        id=uuid4(),
+        master_id=master.id,
+        variant_sku="SKU-TEST-APPROVED",
+        inventory_mode=InventoryMode.STOCK_FIRST,
+        status=ProductVariantStatus.ACTIVE,
+    )
+    db_session.add(variant)
+    await db_session.flush()
+
+    # Create approved asset
+    asset = ContentAsset(
+        id=uuid4(),
+        candidate_product_id=candidate.id,
+        product_variant_id=variant.id,
+        asset_type=AssetType.MAIN_IMAGE,
+        file_url="https://example.com/base.jpg",
+        usage_scope=ContentUsageScope.BASE,
+        human_approved=True,
+        spec={"width": 1000, "height": 1000, "format": "jpg", "has_text": False},
+    )
+    db_session.add(asset)
+    await db_session.commit()
+
+    # Create publisher agent
+    agent = PlatformPublisherAgent()
+
+    # Create context with auto_approve=False
+    context = AgentContext(
+        strategy_run_id=strategy_run.id,
+        db=db_session,
+        input_data={
+            "candidate_product_id": str(candidate.id),
+            "target_platforms": [{"platform": "temu", "region": "us"}],
+            "auto_approve": False,
+        },
+    )
+
+    # Execute should fail because lifecycle is APPROVED, not READY_TO_PUBLISH
+    result = await agent.execute(context)
+
+    assert result.success is False
+    assert "not ready to publish" in result.error_message.lower()
+    assert "approved" in result.error_message.lower()
+
+
+@pytest.mark.asyncio
+async def test_publisher_accepts_ready_to_publish_status(
+    db_session: AsyncSession,
+):
+    """Publisher should accept candidates with READY_TO_PUBLISH status."""
+    from unittest.mock import AsyncMock, patch
+
+    strategy_run = StrategyRun(
+        id=uuid4(),
+        trigger_type=TriggerType.API,
+        source_platform=SourcePlatform.ALIBABA_1688,
+        status=StrategyRunStatus.QUEUED,
+        max_candidates=5,
+    )
+    db_session.add(strategy_run)
+    await db_session.flush()
+
+    # Create candidate with READY_TO_PUBLISH status
+    candidate = CandidateProduct(
+        id=uuid4(),
+        strategy_run_id=strategy_run.id,
+        source_platform=SourcePlatform.ALIBABA_1688,
+        title="Test Product",
+        status=CandidateStatus.DISCOVERED,
+        lifecycle_status=ProductLifecycle.READY_TO_PUBLISH,
+        platform_price=Decimal("10.00"),
+    )
+    db_session.add(candidate)
+    await db_session.flush()
+
+    master = ProductMaster(
+        id=uuid4(),
+        candidate_product_id=candidate.id,
+        internal_sku="SKU-TEST-READY",
+        name="Test Product",
+        status=ProductMasterStatus.ACTIVE,
+    )
+    db_session.add(master)
+    await db_session.flush()
+
+    variant = ProductVariant(
+        id=uuid4(),
+        master_id=master.id,
+        variant_sku="SKU-TEST-READY",
+        inventory_mode=InventoryMode.STOCK_FIRST,
+        status=ProductVariantStatus.ACTIVE,
+    )
+    db_session.add(variant)
+    await db_session.flush()
+
+    # Create approved asset with platform rule
+    asset = ContentAsset(
+        id=uuid4(),
+        candidate_product_id=candidate.id,
+        product_variant_id=variant.id,
+        asset_type=AssetType.MAIN_IMAGE,
+        file_url="https://example.com/base.jpg",
+        usage_scope=ContentUsageScope.BASE,
+        human_approved=True,
+        spec={"width": 1000, "height": 1000, "format": "jpg", "has_text": False},
+    )
+    db_session.add(asset)
+
+    # Create platform rule
+    rule = PlatformContentRule(
+        id=uuid4(),
+        platform=TargetPlatform.TEMU,
+        asset_type=AssetType.MAIN_IMAGE,
+        image_spec={"width": 1000, "height": 1000, "format": "jpg"},
+        allow_text_on_image=False,
+        max_images=10,
+        required_languages=["en"],
+    )
+    db_session.add(rule)
+    await db_session.commit()
+
+    # Create publisher agent
+    agent = PlatformPublisherAgent()
+
+    # Mock the unified_listing_service.create_listing to avoid actual platform calls
+    mock_listing = MagicMock()
+    mock_listing.id = uuid4()
+    mock_listing.platform_listing_id = "test_listing_123"
+
+    with patch.object(
+        agent.unified_listing_service,
+        "create_listing",
+        new=AsyncMock(return_value=mock_listing),
+    ):
+        context = AgentContext(
+            strategy_run_id=strategy_run.id,
+            db=db_session,
+            input_data={
+                "candidate_product_id": str(candidate.id),
+                "target_platforms": [{"platform": "temu", "region": "us"}],
+                "auto_approve": False,
+            },
+        )
+
+        result = await agent.execute(context)
+
+        # Should succeed because lifecycle is READY_TO_PUBLISH
+        assert result.success is True
+        assert result.output_data["published_count"] == 1
+
+        # Verify lifecycle was updated to PUBLISHED
+        await db_session.refresh(candidate)
+        assert candidate.lifecycle_status == ProductLifecycle.PUBLISHED

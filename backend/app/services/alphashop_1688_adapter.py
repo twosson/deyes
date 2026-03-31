@@ -95,7 +95,7 @@ class AlphaShop1688Adapter(SourceAdapter):
         for keyword in keywords[:limit]:
             try:
                 response = await client.intelligent_supplier_selection(
-                    intention=keyword,
+                    intention="AUTO",
                     query=keyword,
                 )
 

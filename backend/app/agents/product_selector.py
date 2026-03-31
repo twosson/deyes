@@ -156,9 +156,9 @@ class ProductSelectorAgent(BaseAgent):
                         self.source_adapter = TemuSourceAdapterV2()
                         created_adapter = True
                     elif platform == SourcePlatform.ALIBABA_1688:
-                        from app.services.alibaba_1688_adapter import Alibaba1688Adapter
+                        from app.services.alphashop_1688_adapter import AlphaShop1688Adapter
 
-                        self.source_adapter = Alibaba1688Adapter()
+                        self.source_adapter = AlphaShop1688Adapter()
                         created_adapter = True
                     else:
                         self.source_adapter = MockSourceAdapter(platform)

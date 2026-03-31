@@ -6,9 +6,9 @@ on low-demand or high-competition products.
 Phase 1 of product selection optimization plan.
 
 Features:
-- Google Trends integration via pytrends
-- Redis caching (24h TTL) to avoid rate limiting
-- Helium 10 API support (optional)
+- AlphaShop keyword search integration (primary, replaces pytrends)
+- Redis caching (24h TTL)
+- Helium 10 API support (optional, retained for enhanced validation)
 - Competition density assessment
 - Trend direction classification
 """
@@ -20,7 +20,9 @@ from decimal import Decimal
 from enum import Enum
 from typing import Optional
 
+from app.clients.alphashop import AlphaShopClient
 from app.clients.redis import RedisClient
+from app.core.config import get_settings
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -297,16 +299,22 @@ class DemandValidator:
         redis_client: Optional[RedisClient] = None,
         cache_ttl_seconds: int = 86400,
         enable_cache: bool = True,
+        alphashop_client: AlphaShopClient | None = None,
+        platform: str | None = None,
+        listing_time: str | None = None,
     ):
         """Initialize demand validator.
 
         Args:
             min_search_volume: Minimum monthly search volume (default: 500)
-            use_helium10: Whether to use Helium 10 API (default: False, use pytrends)
+            use_helium10: Whether to use Helium 10 API (default: False, use AlphaShop)
             helium10_api_key: Helium 10 API key (required if use_helium10=True)
             redis_client: Redis client for caching (optional, will create if None)
             cache_ttl_seconds: Cache TTL in seconds (default: 86400 = 24 hours)
             enable_cache: Whether to enable caching (default: True)
+            alphashop_client: AlphaShop client (optional, will create if None)
+            platform: AlphaShop platform (default: from settings)
+            listing_time: AlphaShop listing time (default: from settings)
         """
         self.min_search_volume = min_search_volume
         self.use_helium10 = use_helium10
@@ -314,9 +322,14 @@ class DemandValidator:
         self.redis_client = redis_client
         self.cache_ttl_seconds = cache_ttl_seconds
         self.enable_cache = enable_cache
+        self.settings = get_settings().model_copy(deep=True)
+        self._alphashop_client = alphashop_client
+        self._created_client = False
+        self.platform = platform or self.settings.keyword_generation_platform
+        self.listing_time = listing_time or self.settings.keyword_generation_listing_time
 
         if use_helium10 and not helium10_api_key:
-            logger.warning("helium10_enabled_but_no_api_key", fallback="pytrends")
+            logger.warning("helium10_enabled_but_no_api_key", fallback="alphashop")
             self.use_helium10 = False
 
     async def validate(
@@ -555,13 +568,191 @@ class DemandValidator:
     ) -> tuple[Optional[int], Optional[Decimal], TrendDirection]:
         """Get search volume and trend data.
 
+        Priority order:
+        1. AlphaShop keyword search (primary)
+        2. Helium 10 API (optional enhancement)
+        3. pytrends (legacy fallback)
+
         Returns:
             Tuple of (search_volume, trend_growth_rate, trend_direction)
         """
+        trends = await self._get_trends_from_alphashop(keyword, region)
+        if trends[0] is not None:
+            return trends
+
         if self.use_helium10:
-            return await self._get_trends_from_helium10(keyword, region)
-        else:
-            return await self._get_trends_from_pytrends(keyword, region)
+            trends = await self._get_trends_from_helium10(keyword, region)
+            if trends[0] is not None:
+                return trends
+
+        return await self._get_trends_from_pytrends(keyword, region)
+
+    async def _get_alphashop_client(self) -> AlphaShopClient | None:
+        """Get or create AlphaShop client when credentials are configured."""
+        if self._alphashop_client is not None:
+            return self._alphashop_client
+        if not self.settings.alphashop_enabled:
+            return None
+        if not self.settings.alphashop_api_key or not self.settings.alphashop_secret_key:
+            return None
+        self._alphashop_client = AlphaShopClient()
+        self._created_client = True
+        return self._alphashop_client
+
+    async def close(self) -> None:
+        """Close underlying AlphaShop client when owned by this instance."""
+        if self._created_client and self._alphashop_client is not None:
+            await self._alphashop_client.close()
+            self._alphashop_client = None
+            self._created_client = False
+
+    async def _get_trends_from_alphashop(
+        self,
+        keyword: str,
+        region: str,
+    ) -> tuple[Optional[int], Optional[Decimal], TrendDirection]:
+        """Get trends from AlphaShop keyword search API.
+
+        Uses AlphaShop to fetch search volume, sales data, and rank trends.
+
+        Returns:
+            Tuple of (search_volume, trend_growth_rate, trend_direction)
+        """
+        client = await self._get_alphashop_client()
+        if client is None:
+            logger.debug(
+                "alphashop_trends_unavailable",
+                keyword=keyword,
+                region=region,
+                reason="missing_configuration_or_disabled",
+            )
+            return None, None, TrendDirection.UNKNOWN
+
+        try:
+            response = await client.search_keywords(
+                platform=self.platform,
+                region=region,
+                keyword=keyword,
+                listing_time=self.listing_time,
+            )
+        except Exception as exc:
+            logger.warning(
+                "alphashop_trends_fetch_failed",
+                keyword=keyword,
+                region=region,
+                error=str(exc),
+            )
+            return None, None, TrendDirection.UNKNOWN
+
+        keyword_list = response.get("keyword_list") or []
+        if not keyword_list:
+            logger.debug(
+                "alphashop_no_keyword_data",
+                keyword=keyword,
+                region=region,
+            )
+            return None, None, TrendDirection.UNKNOWN
+
+        best_match = keyword_list[0]
+        search_volume = self._extract_search_volume_from_alphashop(best_match)
+        trend_growth_rate, trend_direction = self._extract_trend_from_alphashop(best_match)
+
+        logger.info(
+            "alphashop_trends_fetched",
+            keyword=keyword,
+            region=region,
+            search_volume=search_volume,
+            trend_growth_rate=float(trend_growth_rate) if trend_growth_rate else None,
+            trend_direction=trend_direction.value,
+        )
+
+        return search_volume, trend_growth_rate, trend_direction
+
+    def _extract_search_volume_from_alphashop(self, item: dict) -> int:
+        """Extract search volume from AlphaShop keyword result."""
+        direct_volume = self._coerce_int(item.get("searchVolume"))
+        if direct_volume is not None:
+            return max(direct_volume, 100)
+
+        sales_info = item.get("salesInfo") if isinstance(item.get("salesInfo"), dict) else {}
+        sales_volume = self._coerce_int(sales_info.get("searchVolume"))
+        if sales_volume is not None:
+            return max(sales_volume, 100)
+
+        sold_cnt_30d = self._coerce_int(item.get("soldCnt30d"))
+        if sold_cnt_30d is None:
+            sold_cnt_30d = self._coerce_int(sales_info.get("soldCnt30d"))
+        if sold_cnt_30d is not None:
+            return max(sold_cnt_30d * 10, 100)
+
+        search_rank = self._coerce_int(item.get("searchRank"))
+        if search_rank is not None:
+            if search_rank <= 1000:
+                return 10000
+            if search_rank <= 5000:
+                return 5000
+            if search_rank <= 20000:
+                return 2000
+            return 500
+
+        opp_score = self._coerce_int(item.get("oppScore"))
+        if opp_score is not None:
+            return self._estimate_search_volume_from_interest(float(opp_score))
+
+        return 100
+
+    def _extract_trend_from_alphashop(self, item: dict) -> tuple[Optional[Decimal], TrendDirection]:
+        """Extract trend growth rate and direction from AlphaShop keyword result."""
+        rank_trends = self._extract_rank_trends(item)
+        if len(rank_trends) >= 2:
+            first_half = rank_trends[: len(rank_trends) // 2]
+            second_half = rank_trends[len(rank_trends) // 2 :]
+
+            first_avg = sum(first_half) / len(first_half)
+            second_avg = sum(second_half) / len(second_half)
+
+            if first_avg == 0:
+                if second_avg > 0:
+                    return Decimal("1.0"), TrendDirection.RISING
+                return Decimal("0"), TrendDirection.STABLE
+
+            growth_rate_float = (first_avg - second_avg) / first_avg
+            growth_rate = Decimal(str(round(growth_rate_float, 4)))
+            direction = self._classify_trend_direction(growth_rate)
+            return growth_rate, direction
+
+        opp_score = self._coerce_int(item.get("oppScore"))
+        if opp_score is not None:
+            if opp_score >= 70:
+                return Decimal("0.25"), TrendDirection.RISING
+            if opp_score >= 40:
+                return Decimal("0.05"), TrendDirection.STABLE
+            return Decimal("-0.10"), TrendDirection.DECLINING
+
+        return Decimal("0"), TrendDirection.STABLE
+
+    def _extract_rank_trends(self, item: dict) -> list[int]:
+        """Extract numeric rank trend points from AlphaShop result."""
+        raw = item.get("rankTrends")
+        if not isinstance(raw, list):
+            return []
+
+        values: list[int] = []
+        for entry in raw:
+            if isinstance(entry, (int, float)):
+                values.append(int(entry))
+            elif isinstance(entry, str):
+                try:
+                    values.append(int(float(entry)))
+                except Exception:
+                    continue
+            elif isinstance(entry, dict):
+                for key in ("rank", "value", "searchRank"):
+                    candidate = self._coerce_int(entry.get(key))
+                    if candidate is not None:
+                        values.append(candidate)
+                        break
+        return values
 
     async def _get_trends_from_pytrends(
         self,
@@ -889,23 +1080,47 @@ class DemandValidator:
     ) -> CompetitionDensity:
         """Assess competition density by search result count.
 
-        Uses multiple data sources to estimate competition:
-        1. Google Trends competition index (if available)
-        2. Estimated competition from pytrends related queries
-        3. Heuristic classification based on search volume
-
-        Classification:
-        - LOW: <2000 estimated competing listings
-        - MEDIUM: 2000-5000 estimated competing listings
-        - HIGH: >5000 estimated competing listings
-
-        Args:
-            keyword: Search keyword
-            region: Target region
-
-        Returns:
-            CompetitionDensity enum
+        Priority order:
+        1. AlphaShop keyword metrics
+        2. pytrends legacy fallback
+        3. Heuristic classification
         """
+        client = await self._get_alphashop_client()
+        if client is not None:
+            try:
+                response = await client.search_keywords(
+                    platform=self.platform,
+                    region=region,
+                    keyword=keyword,
+                    listing_time=self.listing_time,
+                )
+                keyword_list = response.get("keyword_list") or []
+                if keyword_list:
+                    first_item = keyword_list[0]
+                    search_rank = self._coerce_int(first_item.get("searchRank"))
+                    opp_score = self._coerce_int(first_item.get("oppScore"))
+
+                    if search_rank is not None:
+                        if search_rank <= 1000:
+                            return CompetitionDensity.HIGH
+                        if search_rank <= 10000:
+                            return CompetitionDensity.MEDIUM
+                        return CompetitionDensity.LOW
+
+                    if opp_score is not None:
+                        if opp_score >= 80:
+                            return CompetitionDensity.HIGH
+                        if opp_score >= 50:
+                            return CompetitionDensity.MEDIUM
+                        return CompetitionDensity.LOW
+            except Exception as exc:
+                logger.debug(
+                    "alphashop_competition_assessment_failed",
+                    keyword=keyword,
+                    region=region,
+                    error=str(exc),
+                )
+
         def _assess_competition() -> CompetitionDensity:
             try:
                 from pytrends.request import TrendReq
@@ -919,10 +1134,7 @@ class DemandValidator:
                 return self._heuristic_competition_assessment(keyword)
 
             try:
-                # Initialize pytrends client
                 pytrends = TrendReq(hl="en-US", tz=360)
-
-                # Build payload
                 geo = self._region_to_geo(region)
                 pytrends.build_payload(
                     kw_list=[keyword],
@@ -932,7 +1144,6 @@ class DemandValidator:
                     gprop="",
                 )
 
-                # Get interest over time to check if keyword has data
                 interest_df = pytrends.interest_over_time()
 
                 if interest_df.empty or keyword not in interest_df.columns:
@@ -944,10 +1155,8 @@ class DemandValidator:
                     )
                     return self._heuristic_competition_assessment(keyword)
 
-                # Calculate average interest
                 avg_interest = interest_df[keyword].mean()
 
-                # Try to get related queries for competition signal
                 try:
                     related_queries = pytrends.related_queries()
 
@@ -955,14 +1164,12 @@ class DemandValidator:
                         top_queries = related_queries[keyword].get("top")
                         rising_queries = related_queries[keyword].get("rising")
 
-                        # Count related queries as competition signal
                         related_count = 0
                         if top_queries is not None and not top_queries.empty:
                             related_count += len(top_queries)
                         if rising_queries is not None and not rising_queries.empty:
                             related_count += len(rising_queries)
 
-                        # High number of related queries = high competition
                         if related_count >= 20:
                             competition = CompetitionDensity.HIGH
                         elif related_count >= 10:
@@ -980,16 +1187,14 @@ class DemandValidator:
 
                         return competition
 
-                except Exception as e:
+                except Exception as exc:
                     logger.debug(
                         "related_queries_failed",
                         keyword=keyword,
-                        error=str(e),
+                        error=str(exc),
                         fallback="interest_based",
                     )
 
-                # Fallback: Estimate competition from interest level
-                # High interest usually correlates with high competition
                 if avg_interest >= 60:
                     competition = CompetitionDensity.HIGH
                 elif avg_interest >= 30:
@@ -1007,12 +1212,12 @@ class DemandValidator:
 
                 return competition
 
-            except Exception as e:
+            except Exception as exc:
                 logger.warning(
                     "competition_assessment_failed",
                     keyword=keyword,
                     region=region,
-                    error=str(e),
+                    error=str(exc),
                     fallback="heuristic",
                 )
                 return self._heuristic_competition_assessment(keyword)
@@ -1076,6 +1281,23 @@ class DemandValidator:
         )
 
         return competition
+
+    def _coerce_int(self, value) -> int | None:
+        """Convert supplier numeric fields when possible."""
+        if value is None or value == "":
+            return None
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+        if isinstance(value, str):
+            try:
+                return int(float(value))
+            except Exception:
+                return None
+        return None
 
     async def validate_batch(
         self,

@@ -1,6 +1,6 @@
 # Deyes 项目状态报告
 
-**最后更新**: 2026-03-30
+**最后更新**: 2026-03-31
 **架构版本**: v4.0
 **项目阶段**: Stage 0-5 完成，Stage 6 待实施
 
@@ -20,7 +20,62 @@
 
 ---
 
-## 二、最新交付（2026-03-30）
+## 二、最新交付（2026-03-31）
+
+### AlphaShop 替换 Google Trends / TMAPI 完成 ✅
+
+**背景**：原系统存在两个不可达外部依赖：
+- Google Trends：中国服务器无法访问，导致关键词生成与需求验证退化为 fallback/heuristic
+- TMAPI 1688：生产环境持续返回 HTTP 439 错误，导致 discovery pipeline 无法获取商品
+
+**核心变更**：
+
+#### AlphaShop HTTP 客户端 ✅
+- ✅ `backend/app/clients/alphashop.py`
+  - JWT Bearer 鉴权（HS256，AccessKey/SecretKey）
+  - Token 缓存复用
+  - 五大 API：关键词搜索 / 智能选商 / 供应商查询 / 批量询盘 / 询盘结果
+  - 重试机制（`FAIL_TRIGGER_QPS_LIMIT_POLICY` 自动重试）
+  - 多种响应结构兼容（model list / model dict / nested result）
+  - 完整单元测试：`backend/tests/test_alphashop_client.py`
+
+#### 关键词生成：pytrends → AlphaShop ✅
+- ✅ `backend/app/services/keyword_generator.py`
+  - `_generate_from_alphashop()` 替代 `_generate_from_pytrends()`
+  - 调用 `AlphaShopClient.search_keywords(platform="amazon", region=region, keyword=category)`
+  - 将 AlphaShop `oppScore`, `searchRank`, `soldCnt30d` 映射为 `KeywordResult`
+  - 失败时退回 `_fallback_keywords()`（保留原有冷启动种子词）
+  - `_generate_from_pytrends()` 保留为兼容 shim（直接透传 AlphaShop）
+  - 完整测试：`backend/tests/test_keyword_generator.py`
+
+#### 需求验证：AlphaShop-first provider chain ✅
+- ✅ `backend/app/services/demand_validator.py`
+  - Provider 优先级：**AlphaShop → Helium10 → pytrends（legacy）**
+  - `_get_trends_from_alphashop()`：从 `searchRank`, `soldCnt30d`, `oppScore` 提取搜索量、趋势方向
+  - `_assess_competition_density()`：优先调用 AlphaShop 搜索量作为竞争密度指标
+  - Helium10 降级为可选增强（`demand_validation_use_helium10`）
+  - pytrends 降级为 legacy fallback（保留兼容）
+  - 完整测试：`backend/tests/test_demand_validator.py`（含新增 `TestDemandValidatorAlphaShop`）
+
+#### 1688 适配器：TMAPI → AlphaShop ✅
+- ✅ `backend/app/services/alphashop_1688_adapter.py`
+  - 实现 `SourceAdapter` 接口，替换 `Alibaba1688Adapter` 为主路径
+  - 调用 `AlphaShopClient.intelligent_supplier_selection()` 获取商品
+  - AlphaShop `SpOfferInfoDTO` → `ProductData` 完整映射（含 supplier_candidates）
+  - CNY → USD 自动转换（固定汇率 0.14）
+  - 价格区间过滤、itemId 去重、API 错误容错
+  - 完整测试：`backend/tests/test_alphashop_1688_adapter.py`
+
+#### Adapter 路由切换 ✅
+- ✅ `backend/app/agents/product_selector.py`
+  - `SourcePlatform.ALIBABA_1688` → 默认使用 `AlphaShop1688Adapter`
+
+#### 配置与入口校验 ✅
+- ✅ `backend/app/core/config.py`：新增 `alphashop_*` 配置项
+- ✅ `backend/app/api/routes_agent_runs.py`：1688 入口校验从 `tmapi_api_token` 改为 `alphashop_api_key`
+
+#### 文件处理
+- ✅ `tmapi_1688_client.py` / `alibaba_1688_adapter.py`：保留原文件，标记 deprecated（不移除，便于回滚）
 
 ### Stage 5 多平台统一经营中枢完成 ✅
 
@@ -299,13 +354,15 @@
 ### 3.1 产品选品系统（需求验证优先）
 
 **需求验证层** - `backend/app/services/demand_validator.py:100`
-- ✅ Google Trends 搜索量验证（>500/月）
+- ✅ AlphaShop 搜索量验证（>500/月，主路径）
 - ✅ Helium 10 API 集成（可选增强，自动回退）
+- ✅ pytrends（legacy fallback，保留兼容）
 - ✅ 竞争密度评估（<5000 搜索结果）
 - ✅ 趋势方向分类（rising/stable/declining）
 - ✅ Redis 缓存（24h TTL）
 
 **供应商匹配层** - `backend/app/services/supplier_matcher.py:39`
+- ✅ AlphaShop 1688 智能选商（主路径）
 - ✅ 1688 多路召回（默认、销量、工厂、图像相似）
 - ✅ 供应商竞争集评分（多维度加权）
 - ✅ 历史反馈先验（90 天回溯）
@@ -327,6 +384,7 @@
 - ✅ 组合风险评分: 合规 * 0.6 + 竞争 * 0.4
 
 **动态关键词生成** - `backend/app/services/keyword_generator.py:48`
+- ✅ AlphaShop 关键词查询（主路径）
 - ✅ 每晚生成 top 50 趋势关键词（23:00 UTC）
 - ✅ 扩展到 200+ 长尾关键词
 - ✅ Redis 缓存（24h TTL）
@@ -403,13 +461,37 @@
 - ✅ 展示反馈分布（accepted/rejected/deferred）
 - ✅ ECharts 柱状图
 
-### 3.6 Helium 10 集成（2026-03-27 新增）
+### 3.6 AlphaShop API 集成（2026-03-31 新增）
+
+**API 客户端** - `backend/app/clients/alphashop.py:26`
+- ✅ 完整 API 客户端实现
+- ✅ JWT Bearer 鉴权（HS256，AccessKey/SecretKey）
+- ✅ Token 缓存复用
+- ✅ 五大 API：关键词搜索 / 智能选商 / 供应商查询 / 批量询盘 / 询盘结果
+- ✅ 重试机制（`FAIL_TRIGGER_QPS_LIMIT_POLICY` 自动重试）
+- ✅ 多种响应结构兼容（model list / model dict / nested result）
+
+**配置层** - `backend/app/core/config.py:116`
+- ✅ alphashop_base_url: str (default: "https://api.alphashop.cn")
+- ✅ alphashop_api_key: str (default: '')
+- ✅ alphashop_secret_key: str (default: '')
+- ✅ alphashop_timeout: int (default: 30)
+- ✅ alphashop_max_retries: int (default: 3)
+- ✅ alphashop_enabled: bool (default: True)
+
+**单元测试**
+- ✅ backend/tests/test_alphashop_client.py（18 个测试）
+- ✅ backend/tests/test_alphashop_1688_adapter.py（15 个测试）
+- ✅ backend/tests/test_keyword_generator.py（AlphaShop-first 语义）
+- ✅ backend/tests/test_demand_validator.py（含新增 `TestDemandValidatorAlphaShop`）
+
+### 3.7 Helium 10 集成（2026-03-27 新增）
 
 **API 客户端** - `backend/app/clients/helium10.py:26`
 - ✅ 完整 API 客户端实现
 - ✅ Redis 缓存（24h TTL）
 - ✅ 错误处理（401, 429, 500, timeout）
-- ✅ 自动回退到 Google Trends
+- ✅ 自动回退到 AlphaShop（当前 provider chain）
 
 **配置层** - `backend/app/core/config.py:116`
 - ✅ demand_validation_use_helium10: bool (default: False)
@@ -561,7 +643,9 @@ SGLang + Qwen3.5-35B-A3B (FP8)
 
 ```
 1. 需求验证 (DemandValidator)
-   ├─ Google Trends / Helium 10 搜索量验证 (>500/月)
+   ├─ AlphaShop 搜索量验证 (>500/月, 主路径)
+   ├─ Helium 10 可选增强
+   ├─ pytrends legacy fallback
    ├─ 竞争密度评估 (<5000 搜索结果)
    ├─ 趋势方向分类 (rising/stable/declining)
    └─ Redis 缓存 (24h TTL)
@@ -570,7 +654,7 @@ SGLang + Qwen3.5-35B-A3B (FP8)
    └─ 仅抓取通过需求验证的关键词
 
 3. 供应商匹配 (SupplierMatcher)
-   ├─ 1688 多路召回
+   ├─ AlphaShop 1688 智能选商
    ├─ 供应商竞争集评分
    └─ 历史反馈先验（90 天回溯）
 
@@ -621,26 +705,26 @@ recommendation_score = (
 
 ### P0（立即执行）
 
-1. **Stage 4 测试验证与环境配置**
-   - 安装 dev 依赖（aiosqlite 等）
-   - 运行 Stage 4 所有测试
-   - 验证数据一致性
+1. **AlphaShop 替换回归验证**
+   - 在 Python 3.11 + 完整 dev 依赖环境执行 AlphaShop 相关测试
+   - 验证关键词生成 / 需求验证 / 1688 适配器链路
+   - 修复 provider chain 与映射层回归问题
 
-2. **回归测试可观测性增强**
+2. **测试环境与依赖补齐**
+   - 安装 dev 依赖（`python-jose`, `aiosqlite`, `asyncpg` 等）
+   - 统一本地/CI Python 版本到 3.11+
+   - 补齐 AlphaShop 集成测试运行条件
+
+3. **回归测试可观测性增强**
    - 统一 `strategy_run_id` / `candidate_product_id` / `listing_id` 的日志追踪
    - 结构化记录 agent 输入、输出、错误
 
-3. **Stage 5 规划与设计**
-   - 细化多平台统一经营中枢实施计划
-   - 明确 PlatformRegistry / UnifiedListingService 设计
-   - 评估 PlatformPolicy / CategoryMapping Schema
-
 ### P1（短期）
 
-1. **Stage 5 第一批实施**
-   - A1: 扩展 PlatformListing 支持多平台统一状态管理
-   - A2: 实现 PlatformRegistry / AdapterResolver
-   - A3: 实现 UnifiedListingService
+1. **Stage 6 规划与设计**
+   - 细化自动化经营控制平面实施计划
+   - 明确 Lifecycle / Action Engine 增强设计
+   - 评估 Approval / Rollback / Operations Console 方案
 
 2. **AI 服务部署**
    - 按 `docs/deployment/comfyui-deployment-guide.md` 部署
@@ -654,20 +738,20 @@ recommendation_score = (
 
 ### P2（中期）
 
-1. **Stage 5 第二批实施**
-   - A4: 建立跨平台 SKU 经营视图
-   - B1: PlatformPolicy / CategoryMapping Schema
-   - C1: 多币种与地区化能力
-
-2. **Stage 6 预研**
-   - Lifecycle / Action Engine 增强设计
-   - Approval / Rollback 控制机制设计
+1. **Stage 6 第一批实施**
+   - Lifecycle / Action Engine 增强
+   - Approval / Rollback 控制机制
    - Operations Console 原型
 
-3. **性能优化与监控**
+2. **性能优化与监控**
    - 利润快照查询缓存
    - 退款率异常告警
    - 经营快照 Dashboard
+
+3. **生产链路验收**
+   - 验证 AlphaShop 在中国网络环境下的稳定性
+   - 评估 Helium10 可选增强的成本与收益
+   - 清理 TMAPI / Google Trends 的遗留文档与运行依赖
 
 ---
 
@@ -710,9 +794,10 @@ recommendation_score = (
 
 ### 9.2 API 依赖风险
 
-- Google Trends 限流
-- Helium 10 API 成本
-- 1688 API 稳定性
+- AlphaShop API 稳定性（中国网络环境）
+- Helium 10 API 成本（可选增强）
+- 1688 供应商匹配质量（AlphaShop 智能选商映射准确性）
+- pytrends legacy fallback 限流（保留兼容）
 
 ### 9.3 质量风险
 
@@ -729,13 +814,15 @@ recommendation_score = (
 
 ## 十、总结
 
-Deyes 项目已完成 Stage 0-4 的核心功能构建，建立了从选品推荐、ERP Lite、素材本地化、双模式发布到真实经营损益的完整闭环。技术架构采用 FLUX.1-dev + Qwen3.5 + SGLang 的组合，GPU 资源利用率达 95%。
+Deyes 项目已完成 Stage 0-5 的核心功能构建，建立了从选品推荐、ERP Lite、素材本地化、双模式发布、真实经营损益到多平台统一经营中枢的完整闭环。技术架构采用 FLUX.1-dev + Qwen3.5 + SGLang 的组合，GPU 资源利用率达 95%。
 
-**当前状态**: Stage 0-4 已完成，包括业务规则矩阵、ERP Lite 核心、素材本地化、双模式发布、真实经营损益层
+**当前状态**: Stage 0-5 已完成，包括业务规则矩阵、ERP Lite 核心、素材本地化、双模式发布、真实经营损益层、多平台统一经营中枢
+
+**最新交付（2026-03-31）**: AlphaShop 替换 Google Trends / TMAPI 完成，建立 AlphaShop-first 选品 pipeline（关键词生成 / 需求验证 / 1688 适配器），测试代码已补，待 Python 3.11 环境完整验证
 
 **下一步重点**:
-1. Stage 4 测试验证与环境配置
-2. Stage 5 多平台统一经营中枢实施
+1. AlphaShop 替换回归验证与环境配置
+2. Stage 6 自动化经营控制平面规划与实施
 3. AI 服务部署（ComfyUI + SGLang）
 
 **长期目标**: 实现日产能 8,000 套，覆盖 6 大跨境电商平台，成为跨境电商自动化运营的行业标杆
@@ -744,4 +831,4 @@ Deyes 项目已完成 Stage 0-4 的核心功能构建，建立了从选品推荐
 
 **文档维护**: 本文档应在每次重大功能交付后更新
 
-**最后更新**: 2026-03-29 - Stage 3-4 完成状态更新
+**最后更新**: 2026-03-31 - AlphaShop 替换完成，Stage 0-5 状态同步

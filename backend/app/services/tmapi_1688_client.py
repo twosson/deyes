@@ -1,4 +1,7 @@
-"""TMAPI 1688 API client.
+"""Deprecated TMAPI 1688 API client.
+
+Deprecated: replaced by `app.clients.alphashop.AlphaShopClient` for production
+1688 discovery flows. Retained temporarily for compatibility and rollback reference.
 
 This client provides direct access to TMAPI's 1688 marketplace integration endpoints.
 It handles transport, authentication, retry logic, and endpoint-level response normalization.

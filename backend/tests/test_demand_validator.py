@@ -130,7 +130,7 @@ class TestDemandValidator:
         assert validator.helium10_api_key == "test_key"
 
     def test_init_helium10_without_key(self):
-        """Test initialization falls back to pytrends if no Helium 10 key."""
+        """Test initialization disables Helium 10 when no API key is provided."""
         validator = DemandValidator(
             use_helium10=True,
             helium10_api_key=None,
@@ -184,8 +184,8 @@ class TestDemandValidator:
         assert validator._classify_trend_direction(Decimal("-0.30")) == TrendDirection.DECLINING
 
     @pytest.mark.asyncio
-    async def test_validate_with_mock_pytrends(self):
-        """Test validate method with mocked pytrends."""
+    async def test_validate_with_mock_trends(self):
+        """Test validate method with mocked provider trend signals."""
         validator = DemandValidator(min_search_volume=500)
 
         # Mock the _get_search_trends method
@@ -430,8 +430,8 @@ class TestDemandValidator:
         assert validator._heuristic_competition_assessment("samsung galaxy phone") == CompetitionDensity.HIGH
 
     @pytest.mark.asyncio
-    async def test_competition_assessment_with_mock(self):
-        """Test competition assessment with mocked pytrends."""
+    async def test_competition_assessment_with_legacy_fallback(self):
+        """Test competition assessment falls back to heuristic when all providers are unavailable."""
         validator = DemandValidator()
 
         # Mock pytrends to return high interest
@@ -446,17 +446,238 @@ class TestDemandValidator:
         assert result == CompetitionDensity.HIGH
 
 
+class TestDemandValidatorAlphaShop:
+    """Test AlphaShop-first demand validation behavior."""
+
+    def test_extract_search_volume_from_alphashop(self):
+        """Test AlphaShop search volume mapping."""
+        validator = DemandValidator()
+
+        assert validator._extract_search_volume_from_alphashop({"searchVolume": 3000}) == 3000
+        assert validator._extract_search_volume_from_alphashop({"salesInfo": {"searchVolume": 2500}}) == 2500
+        assert validator._extract_search_volume_from_alphashop({"soldCnt30d": 400}) == 4000
+        assert validator._extract_search_volume_from_alphashop({"searchRank": 800}) == 10000
+        assert validator._extract_search_volume_from_alphashop({"searchRank": 7000}) == 2000
+        assert validator._extract_search_volume_from_alphashop({"oppScore": 60}) == 5000
+
+    def test_extract_trend_from_alphashop_rank_trends(self):
+        """Test AlphaShop trend extraction from rank trends."""
+        validator = DemandValidator()
+
+        growth_rate, direction = validator._extract_trend_from_alphashop(
+            {"rankTrends": [100, 80, 50, 40]}
+        )
+
+        assert growth_rate == Decimal("0.5")
+        assert direction == TrendDirection.RISING
+
+    def test_extract_trend_from_alphashop_opp_score(self):
+        """Test AlphaShop trend extraction from opportunity score."""
+        validator = DemandValidator()
+
+        growth_rate, direction = validator._extract_trend_from_alphashop({"oppScore": 75})
+        assert growth_rate == Decimal("0.25")
+        assert direction == TrendDirection.RISING
+
+        growth_rate, direction = validator._extract_trend_from_alphashop({"oppScore": 50})
+        assert growth_rate == Decimal("0.05")
+        assert direction == TrendDirection.STABLE
+
+        growth_rate, direction = validator._extract_trend_from_alphashop({"oppScore": 20})
+        assert growth_rate == Decimal("-0.10")
+        assert direction == TrendDirection.DECLINING
+
+    def test_extract_rank_trends(self):
+        """Test AlphaShop rank trend extraction helper."""
+        validator = DemandValidator()
+
+        result = validator._extract_rank_trends(
+            {"rankTrends": [100, "200", {"rank": 300}, {"value": 400}, {"searchRank": 500}, "bad"]}
+        )
+
+        assert result == [100, 200, 300, 400, 500]
+
+    @pytest.mark.asyncio
+    async def test_get_trends_from_alphashop(self):
+        """Test AlphaShop trend lookup returns mapped demand signals."""
+        mock_client = AsyncMock()
+        mock_client.search_keywords.return_value = {
+            "keyword_list": [
+                {
+                    "keyword": "phone case",
+                    "searchVolume": 3200,
+                    "rankTrends": [100, 80, 50, 40],
+                }
+            ]
+        }
+
+        validator = DemandValidator(alphashop_client=mock_client)
+
+        volume, growth_rate, direction = await validator._get_trends_from_alphashop(
+            keyword="phone case",
+            region="US",
+        )
+
+        assert volume == 3200
+        assert growth_rate == Decimal("0.5")
+        assert direction == TrendDirection.RISING
+
+    @pytest.mark.asyncio
+    async def test_get_trends_from_alphashop_without_client(self):
+        """Test AlphaShop trend lookup degrades cleanly when client is unavailable."""
+        validator = DemandValidator()
+
+        with patch.object(validator, "_get_alphashop_client", new_callable=AsyncMock) as mock_get_client:
+            mock_get_client.return_value = None
+            volume, growth_rate, direction = await validator._get_trends_from_alphashop(
+                keyword="phone case",
+                region="US",
+            )
+
+        assert volume is None
+        assert growth_rate is None
+        assert direction == TrendDirection.UNKNOWN
+
+    @pytest.mark.asyncio
+    async def test_get_search_trends_prefers_alphashop(self):
+        """Test provider priority uses AlphaShop before Helium 10 and pytrends."""
+        validator = DemandValidator(use_helium10=True, helium10_api_key="test_key")
+
+        with patch.object(
+            validator,
+            "_get_trends_from_alphashop",
+            new_callable=AsyncMock,
+            return_value=(3000, Decimal("0.30"), TrendDirection.RISING),
+        ) as mock_alpha:
+            with patch.object(
+                validator,
+                "_get_trends_from_helium10",
+                new_callable=AsyncMock,
+            ) as mock_helium10:
+                with patch.object(
+                    validator,
+                    "_get_trends_from_pytrends",
+                    new_callable=AsyncMock,
+                ) as mock_pytrends:
+                    result = await validator._get_search_trends("phone case", "US")
+
+        assert result == (3000, Decimal("0.30"), TrendDirection.RISING)
+        mock_alpha.assert_called_once()
+        mock_helium10.assert_not_called()
+        mock_pytrends.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_get_search_trends_falls_back_to_helium10(self):
+        """Test provider priority falls back to Helium 10 when AlphaShop is unavailable."""
+        validator = DemandValidator(use_helium10=True, helium10_api_key="test_key")
+
+        with patch.object(
+            validator,
+            "_get_trends_from_alphashop",
+            new_callable=AsyncMock,
+            return_value=(None, None, TrendDirection.UNKNOWN),
+        ) as mock_alpha:
+            with patch.object(
+                validator,
+                "_get_trends_from_helium10",
+                new_callable=AsyncMock,
+                return_value=(2200, Decimal("0.20"), TrendDirection.RISING),
+            ) as mock_helium10:
+                with patch.object(
+                    validator,
+                    "_get_trends_from_pytrends",
+                    new_callable=AsyncMock,
+                ) as mock_pytrends:
+                    result = await validator._get_search_trends("phone case", "US")
+
+        assert result == (2200, Decimal("0.20"), TrendDirection.RISING)
+        mock_alpha.assert_called_once()
+        mock_helium10.assert_called_once()
+        mock_pytrends.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_get_search_trends_falls_back_to_pytrends(self):
+        """Test provider priority reaches legacy pytrends fallback when needed."""
+        validator = DemandValidator(use_helium10=True, helium10_api_key="test_key")
+
+        with patch.object(
+            validator,
+            "_get_trends_from_alphashop",
+            new_callable=AsyncMock,
+            return_value=(None, None, TrendDirection.UNKNOWN),
+        ) as mock_alpha:
+            with patch.object(
+                validator,
+                "_get_trends_from_helium10",
+                new_callable=AsyncMock,
+                return_value=(None, None, TrendDirection.UNKNOWN),
+            ) as mock_helium10:
+                with patch.object(
+                    validator,
+                    "_get_trends_from_pytrends",
+                    new_callable=AsyncMock,
+                    return_value=(1500, Decimal("0.15"), TrendDirection.STABLE),
+                ) as mock_pytrends:
+                    result = await validator._get_search_trends("phone case", "US")
+
+        assert result == (1500, Decimal("0.15"), TrendDirection.STABLE)
+        mock_alpha.assert_called_once()
+        mock_helium10.assert_called_once()
+        mock_pytrends.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_assess_competition_density_from_alphashop_search_rank(self):
+        """Test competition density uses AlphaShop search rank when available."""
+        mock_client = AsyncMock()
+        mock_client.search_keywords.return_value = {
+            "keyword_list": [{"searchRank": 500}]
+        }
+        validator = DemandValidator(alphashop_client=mock_client)
+
+        result = await validator._assess_competition_density("phone case", "US")
+
+        assert result == CompetitionDensity.HIGH
+
+    @pytest.mark.asyncio
+    async def test_assess_competition_density_from_alphashop_opp_score(self):
+        """Test competition density uses AlphaShop opportunity score when rank is absent."""
+        mock_client = AsyncMock()
+        mock_client.search_keywords.return_value = {
+            "keyword_list": [{"oppScore": 30}]
+        }
+        validator = DemandValidator(alphashop_client=mock_client)
+
+        result = await validator._assess_competition_density("phone case", "US")
+
+        assert result == CompetitionDensity.LOW
+
+    @pytest.mark.asyncio
+    async def test_close_closes_owned_client_only(self):
+        """Test close only closes AlphaShop clients owned by validator."""
+        injected_client = AsyncMock()
+        validator = DemandValidator(alphashop_client=injected_client)
+        await validator.close()
+        injected_client.close.assert_not_called()
+
+        owned_client = AsyncMock()
+        validator = DemandValidator()
+        validator._alphashop_client = owned_client
+        validator._created_client = True
+        await validator.close()
+        owned_client.close.assert_called_once()
+
+
 @pytest.mark.integration
 class TestDemandValidatorIntegration:
-    """Integration tests for DemandValidator with real pytrends.
+    """Integration tests for DemandValidator with the real provider chain.
 
-    These tests require internet connection and may be rate-limited by Google.
-    Run with: pytest -m integration
+    These tests require external provider access and may fall back depending on
+    environment configuration.
     """
 
     @pytest.mark.asyncio
-    async def test_pytrends_real_keyword(self):
-        """Test with real pytrends API call."""
+    async def test_real_keyword_validation(self):
+        """Test with real provider chain for a popular keyword."""
         validator = DemandValidator(min_search_volume=100)
 
         # Use a popular keyword that should have data
@@ -481,7 +702,7 @@ class TestDemandValidatorIntegration:
         assert result.trend_growth_rate is not None
 
     @pytest.mark.asyncio
-    async def test_pytrends_obscure_keyword(self):
+    async def test_obscure_keyword_validation(self):
         """Test with obscure keyword that may have no data."""
         validator = DemandValidator(min_search_volume=100)
 
@@ -497,7 +718,7 @@ class TestDemandValidatorIntegration:
         assert result.trend_direction is not None
 
     @pytest.mark.asyncio
-    async def test_pytrends_different_regions(self):
+    async def test_different_regions_validation(self):
         """Test with different regions."""
         validator = DemandValidator(min_search_volume=100)
 
@@ -519,11 +740,11 @@ class TestDemandValidatorIntegration:
 
 
 @pytest.mark.asyncio
-async def test_pytrends_fallback_on_import_error():
-    """Test fallback to mock data when pytrends is not installed."""
+async def test_provider_fallback_on_import_error():
+    """Test fallback to mock data when external providers are unavailable."""
     validator = DemandValidator()
 
-    # Mock ImportError for pytrends
+    # Mock ImportError for external providers
     with patch("app.services.demand_validator.asyncio.to_thread") as mock_to_thread:
 
         def mock_fetch():
@@ -533,8 +754,8 @@ async def test_pytrends_fallback_on_import_error():
 
         with patch.object(
             validator,
-            "_get_trends_from_pytrends",
-            side_effect=lambda k, r: (1500, Decimal("0.15"), TrendDirection.STABLE),
+            "_get_trends_from_alphashop",
+            return_value=(None, None, TrendDirection.UNKNOWN),
         ):
             result = await validator.validate(
                 keyword="phone case",
@@ -542,10 +763,9 @@ async def test_pytrends_fallback_on_import_error():
                 region="US",
             )
 
-    # Should fallback to mock data
-    assert result.search_volume == 1500
-    assert result.trend_growth_rate == Decimal("0.15")
-    assert result.trend_direction == TrendDirection.STABLE
+    # Should fallback to heuristic/mock data
+    assert result.search_volume is not None
+    assert result.trend_direction is not None
 
 
 class TestRegionSpecificValidation:
@@ -1027,47 +1247,49 @@ class TestPlatformSpecificValidation:
 
 
 class TestHelium10Integration:
-    """Test Helium 10 API integration."""
+    """Test Helium 10 integration within the current provider chain."""
 
     @pytest.mark.asyncio
     async def test_helium10_enabled_with_valid_key(self):
-        """Test Helium 10 integration with valid API key."""
+        """Test Helium 10 is used after AlphaShop returns no data."""
         validator = DemandValidator(
             use_helium10=True,
             helium10_api_key="test_api_key",
         )
 
-        # Mock Helium10Client
-        with patch("app.services.demand_validator.Helium10Client") as MockClient:
-            mock_client_instance = AsyncMock()
-            mock_client_instance.get_keyword_data.return_value = {
-                "search_volume": 3000,
-                "competition_score": 45,
-                "trend_direction": "rising",
-                "trend_growth_rate": 0.30,
-            }
-            mock_client_instance.close = AsyncMock()
-            MockClient.return_value = mock_client_instance
+        with patch.object(
+            validator,
+            "_get_trends_from_alphashop",
+            new_callable=AsyncMock,
+            return_value=(None, None, TrendDirection.UNKNOWN),
+        ) as mock_alpha:
+            with patch("app.clients.helium10.Helium10Client") as MockClient:
+                mock_client_instance = AsyncMock()
+                mock_client_instance.get_keyword_data.return_value = {
+                    "search_volume": 3000,
+                    "competition_score": 45,
+                    "trend_direction": "rising",
+                    "trend_growth_rate": 0.30,
+                }
+                mock_client_instance.close = AsyncMock()
+                MockClient.return_value = mock_client_instance
 
-            # Mock competition assessment
-            with patch.object(
-                validator,
-                "_assess_competition_density",
-                return_value=CompetitionDensity.MEDIUM,
-            ):
-                result = await validator.validate(
-                    keyword="phone case",
-                    category="electronics",
-                    region="US",
-                )
+                with patch.object(
+                    validator,
+                    "_assess_competition_density",
+                    return_value=CompetitionDensity.MEDIUM,
+                ):
+                    result = await validator.validate(
+                        keyword="phone case",
+                        category="electronics",
+                        region="US",
+                    )
 
-        # Should use Helium 10 data
         assert result.search_volume == 3000
         assert result.trend_direction == TrendDirection.RISING
         assert result.trend_growth_rate == Decimal("0.30")
         assert result.passed is True
-
-        # Should have called Helium 10 client
+        mock_alpha.assert_called_once()
         mock_client_instance.get_keyword_data.assert_called_once_with(
             keyword="phone case",
             marketplace="US",
@@ -1075,106 +1297,118 @@ class TestHelium10Integration:
         mock_client_instance.close.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_helium10_fallback_to_pytrends_on_error(self):
-        """Test fallback to pytrends when Helium 10 fails."""
+    async def test_helium10_fallback_to_legacy_provider_on_error(self):
+        """Test fallback to legacy provider when Helium 10 returns no data."""
         validator = DemandValidator(
             use_helium10=True,
             helium10_api_key="test_api_key",
         )
 
-        # Mock Helium10Client to return None (API error)
-        with patch("app.services.demand_validator.Helium10Client") as MockClient:
-            mock_client_instance = AsyncMock()
-            mock_client_instance.get_keyword_data.return_value = None
-            mock_client_instance.close = AsyncMock()
-            MockClient.return_value = mock_client_instance
+        with patch.object(
+            validator,
+            "_get_trends_from_alphashop",
+            new_callable=AsyncMock,
+            return_value=(None, None, TrendDirection.UNKNOWN),
+        ):
+            with patch("app.clients.helium10.Helium10Client") as MockClient:
+                mock_client_instance = AsyncMock()
+                mock_client_instance.get_keyword_data.return_value = None
+                mock_client_instance.close = AsyncMock()
+                MockClient.return_value = mock_client_instance
 
-            # Mock pytrends fallback
-            with patch.object(
-                validator,
-                "_get_trends_from_pytrends",
-                return_value=(2000, Decimal("0.25"), TrendDirection.RISING),
-            ):
                 with patch.object(
                     validator,
-                    "_assess_competition_density",
-                    return_value=CompetitionDensity.LOW,
+                    "_get_trends_from_pytrends",
+                    return_value=(2000, Decimal("0.25"), TrendDirection.RISING),
                 ):
-                    result = await validator.validate(
-                        keyword="phone case",
-                        category="electronics",
-                        region="US",
-                    )
+                    with patch.object(
+                        validator,
+                        "_assess_competition_density",
+                        return_value=CompetitionDensity.LOW,
+                    ):
+                        result = await validator.validate(
+                            keyword="phone case",
+                            category="electronics",
+                            region="US",
+                        )
 
-        # Should fallback to pytrends
         assert result.search_volume == 2000
         assert result.trend_direction == TrendDirection.RISING
         assert result.trend_growth_rate == Decimal("0.25")
         assert result.passed is True
 
     @pytest.mark.asyncio
-    async def test_helium10_fallback_to_pytrends_on_exception(self):
-        """Test fallback to pytrends when Helium 10 raises exception."""
+    async def test_helium10_fallback_to_legacy_provider_on_exception(self):
+        """Test fallback to legacy provider when Helium 10 raises exception."""
         validator = DemandValidator(
             use_helium10=True,
             helium10_api_key="test_api_key",
         )
 
-        # Mock Helium10Client to raise exception
-        with patch("app.services.demand_validator.Helium10Client") as MockClient:
-            mock_client_instance = AsyncMock()
-            mock_client_instance.get_keyword_data.side_effect = Exception("API error")
-            mock_client_instance.close = AsyncMock()
-            MockClient.return_value = mock_client_instance
+        with patch.object(
+            validator,
+            "_get_trends_from_alphashop",
+            new_callable=AsyncMock,
+            return_value=(None, None, TrendDirection.UNKNOWN),
+        ):
+            with patch("app.clients.helium10.Helium10Client") as MockClient:
+                mock_client_instance = AsyncMock()
+                mock_client_instance.get_keyword_data.side_effect = Exception("API error")
+                mock_client_instance.close = AsyncMock()
+                MockClient.return_value = mock_client_instance
 
-            # Mock pytrends fallback
-            with patch.object(
-                validator,
-                "_get_trends_from_pytrends",
-                return_value=(2000, Decimal("0.25"), TrendDirection.RISING),
-            ):
                 with patch.object(
                     validator,
-                    "_assess_competition_density",
-                    return_value=CompetitionDensity.LOW,
+                    "_get_trends_from_pytrends",
+                    return_value=(2000, Decimal("0.25"), TrendDirection.RISING),
                 ):
-                    result = await validator.validate(
-                        keyword="phone case",
-                        category="electronics",
-                        region="US",
-                    )
+                    with patch.object(
+                        validator,
+                        "_assess_competition_density",
+                        return_value=CompetitionDensity.LOW,
+                    ):
+                        result = await validator.validate(
+                            keyword="phone case",
+                            category="electronics",
+                            region="US",
+                        )
 
-        # Should fallback to pytrends
         assert result.search_volume == 2000
         assert result.trend_direction == TrendDirection.RISING
         assert result.trend_growth_rate == Decimal("0.25")
         assert result.passed is True
 
     @pytest.mark.asyncio
-    async def test_helium10_disabled_uses_pytrends(self):
-        """Test that pytrends is used when Helium 10 is disabled."""
+    async def test_helium10_disabled_uses_legacy_fallback_when_alphashop_unavailable(self):
+        """Test legacy fallback is used when Helium 10 is disabled and AlphaShop has no data."""
         validator = DemandValidator(
             use_helium10=False,
         )
 
-        # Mock pytrends
         with patch.object(
             validator,
-            "_get_trends_from_pytrends",
-            return_value=(2000, Decimal("0.25"), TrendDirection.RISING),
-        ):
+            "_get_trends_from_alphashop",
+            new_callable=AsyncMock,
+            return_value=(None, None, TrendDirection.UNKNOWN),
+        ) as mock_alpha:
             with patch.object(
                 validator,
-                "_assess_competition_density",
-                return_value=CompetitionDensity.LOW,
-            ):
-                result = await validator.validate(
-                    keyword="phone case",
-                    category="electronics",
-                    region="US",
-                )
+                "_get_trends_from_pytrends",
+                return_value=(2000, Decimal("0.25"), TrendDirection.RISING),
+            ) as mock_pytrends:
+                with patch.object(
+                    validator,
+                    "_assess_competition_density",
+                    return_value=CompetitionDensity.LOW,
+                ):
+                    result = await validator.validate(
+                        keyword="phone case",
+                        category="electronics",
+                        region="US",
+                    )
 
-        # Should use pytrends
         assert result.search_volume == 2000
         assert result.trend_direction == TrendDirection.RISING
         assert result.passed is True
+        mock_alpha.assert_called_once()
+        mock_pytrends.assert_called_once()

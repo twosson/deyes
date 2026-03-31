@@ -141,11 +141,11 @@ async def create_agent_run(
     if (
         request.platform == SourcePlatform.ALIBABA_1688
         and settings.use_real_scrapers
-        and not settings.tmapi_api_token
+        and (not settings.alphashop_api_key or not settings.alphashop_secret_key)
     ):
         raise HTTPException(
             status_code=503,
-            detail="TMAPI API token is required for alibaba_1688 discovery. Configure TMAPI_API_TOKEN, or disable real scrapers.",
+            detail="AlphaShop credentials are required for alibaba_1688 discovery. Configure ALPHASHOP_API_KEY and ALPHASHOP_SECRET_KEY, or disable real scrapers.",
         )
 
     run_id = uuid4()

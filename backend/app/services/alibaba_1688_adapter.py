@@ -1,4 +1,7 @@
-"""1688 source adapter built on TMAPI 1688 endpoints.
+"""Deprecated 1688 source adapter built on TMAPI 1688 endpoints.
+
+Deprecated: replaced by `AlphaShop1688Adapter` for production 1688 discovery.
+This module is retained temporarily for compatibility and rollback reference.
 
 Business flow:
 - Stage A: build search seeds from explicit keywords, category, or cold-start seeds

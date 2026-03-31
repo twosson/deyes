@@ -1,20 +1,24 @@
 """Keyword generation service for dynamic product discovery.
 
-Phase 3 Enhancement: Automatically generate trending keywords using Google Trends
+Phase 3 Enhancement: Automatically generate trending keywords using AlphaShop
 and expand them into long-tail keywords for product selection.
 
 Features:
-- Generate trending keywords by category using pytrends
-- Expand keywords using related queries
+- Generate trending keywords by category using AlphaShop keyword search
+- Expand keywords using AlphaShop related keyword variants
 - Cache results in Redis (24h TTL)
 - Support multiple regions
+- Preserve fallback keyword generation when AlphaShop is unavailable
 """
-import asyncio
+from __future__ import annotations
+
 import hashlib
 import json
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
+from app.clients.alphashop import AlphaShopClient
+from app.core.config import get_settings
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -26,8 +30,8 @@ class KeywordResult:
 
     keyword: str
     search_volume: int
-    trend_score: int  # 0-100, based on Google Trends interest
-    competition_density: str  # "low", "medium", "high"
+    trend_score: int
+    competition_density: str
     related_keywords: list[str] = field(default_factory=list)
     category: Optional[str] = None
     region: str = "US"
@@ -46,32 +50,47 @@ class KeywordResult:
 
 
 class KeywordGenerator:
-    """Generate trending keywords for product discovery.
-
-    Uses Google Trends (pytrends) to identify trending keywords and expand them
-    into long-tail variations for better product discovery.
-    """
+    """Generate trending keywords for product discovery."""
 
     def __init__(
         self,
         redis_client=None,
-        cache_ttl_seconds: int = 86400,  # 24 hours
+        cache_ttl_seconds: int = 86400,
         enable_cache: bool = True,
-        min_trend_score: int = 20,  # Minimum trend score to include
+        min_trend_score: int = 20,
+        alphashop_client: AlphaShopClient | None = None,
+        platform: str | None = None,
+        listing_time: str | None = None,
     ):
-        """Initialize keyword generator.
-
-        Args:
-            redis_client: Redis client for caching (optional)
-            cache_ttl_seconds: Cache TTL in seconds (default: 24 hours)
-            enable_cache: Whether to enable caching (default: True)
-            min_trend_score: Minimum trend score to include keyword (default: 20)
-        """
         self.redis_client = redis_client
         self.cache_ttl_seconds = cache_ttl_seconds
         self.enable_cache = enable_cache
         self.min_trend_score = min_trend_score
         self.logger = logger
+        self.settings = get_settings().model_copy(deep=True)
+        self._alphashop_client = alphashop_client
+        self._created_client = False
+        self.platform = platform or self.settings.keyword_generation_platform
+        self.listing_time = listing_time or self.settings.keyword_generation_listing_time
+
+    async def _get_alphashop_client(self) -> AlphaShopClient | None:
+        """Get or create AlphaShop client when credentials are configured."""
+        if self._alphashop_client is not None:
+            return self._alphashop_client
+        if not self.settings.alphashop_enabled:
+            return None
+        if not self.settings.alphashop_api_key or not self.settings.alphashop_secret_key:
+            return None
+        self._alphashop_client = AlphaShopClient()
+        self._created_client = True
+        return self._alphashop_client
+
+    async def close(self) -> None:
+        """Close underlying AlphaShop client when owned by this instance."""
+        if self._created_client and self._alphashop_client is not None:
+            await self._alphashop_client.close()
+            self._alphashop_client = None
+            self._created_client = False
 
     async def generate_trending_keywords(
         self,
@@ -79,17 +98,7 @@ class KeywordGenerator:
         region: str = "US",
         limit: int = 50,
     ) -> list[KeywordResult]:
-        """Generate trending keywords for a category.
-
-        Args:
-            category: Product category (e.g., "electronics", "fashion")
-            region: Region code (e.g., "US", "UK", "JP")
-            limit: Maximum number of keywords to return
-
-        Returns:
-            List of KeywordResult objects sorted by trend score (descending)
-        """
-        # Check cache first
+        """Generate trending keywords for a category."""
         if self.enable_cache and self.redis_client:
             cached_results = await self._get_from_cache(category, region)
             if cached_results:
@@ -106,12 +115,13 @@ class KeywordGenerator:
             category=category,
             region=region,
             limit=limit,
+            platform=self.platform,
         )
 
-        # Generate keywords using pytrends
-        keywords = await self._generate_from_pytrends(category, region, limit)
+        keywords = await self._generate_from_alphashop(category, region, limit)
+        if not keywords:
+            keywords = self._fallback_keywords(category, region, limit)
 
-        # Save to cache
         if self.enable_cache and self.redis_client:
             await self._save_to_cache(category, region, keywords)
 
@@ -132,20 +142,7 @@ class KeywordGenerator:
         limit: int = 20,
         expand_top_n: int = 5,
     ) -> list[KeywordResult]:
-        """Generate keywords for real-time product selection.
-
-        This method is optimized for product selection flow (vs nightly research).
-        It generates fewer keywords and optionally expands top results.
-
-        Args:
-            category: Product category (optional, defaults to "electronics")
-            region: Region code (default: "US")
-            limit: Maximum base keywords to generate (default: 20)
-            expand_top_n: Number of top keywords to expand (default: 5)
-
-        Returns:
-            List of KeywordResult objects
-        """
+        """Generate keywords for real-time product selection."""
         self.logger.info(
             "selection_keyword_generation_started",
             category=category,
@@ -153,7 +150,6 @@ class KeywordGenerator:
             limit=limit,
         )
 
-        # Generate base keywords
         base_keywords = await self.generate_trending_keywords(
             category=category or "electronics",
             region=region,
@@ -168,7 +164,6 @@ class KeywordGenerator:
             )
             return []
 
-        # Optionally expand top keywords
         if expand_top_n > 0:
             expanded_keywords = []
             for keyword_result in base_keywords[:expand_top_n]:
@@ -176,35 +171,34 @@ class KeywordGenerator:
                     related = await self.expand_keyword(
                         keyword=keyword_result.keyword,
                         region=region,
-                        limit=5,  # Limit expansions per keyword
+                        limit=5,
                     )
-                    # Convert related strings to KeywordResult objects
                     for related_kw in related:
                         expanded_keywords.append(
                             KeywordResult(
                                 keyword=related_kw,
-                                search_volume=keyword_result.search_volume // 2,  # Estimate
-                                trend_score=keyword_result.trend_score - 10,  # Slightly lower
+                                search_volume=max(keyword_result.search_volume // 2, 100),
+                                trend_score=max(keyword_result.trend_score - 10, 0),
                                 competition_density=keyword_result.competition_density,
                                 related_keywords=[],
                                 category=category,
                                 region=region,
                             )
                         )
-                except Exception as e:
+                except Exception as exc:
                     self.logger.warning(
                         "selection_keyword_expansion_failed",
                         keyword=keyword_result.keyword,
-                        error=str(e),
+                        error=str(exc),
                     )
 
-            # Combine base and expanded, deduplicate
             all_keywords = base_keywords + expanded_keywords
             seen = set()
             unique_keywords = []
             for kw in all_keywords:
-                if kw.keyword not in seen:
-                    seen.add(kw.keyword)
+                normalized = kw.keyword.lower().strip()
+                if normalized not in seen:
+                    seen.add(normalized)
                     unique_keywords.append(kw)
 
             self.logger.info(
@@ -225,16 +219,7 @@ class KeywordGenerator:
         region: str = "US",
         limit: int = 20,
     ) -> list[str]:
-        """Expand a keyword into related long-tail keywords.
-
-        Args:
-            keyword: Base keyword to expand
-            region: Region code
-            limit: Maximum number of related keywords to return
-
-        Returns:
-            List of related keywords
-        """
+        """Expand a keyword into related long-tail keywords."""
         self.logger.info(
             "keyword_expansion_started",
             keyword=keyword,
@@ -252,159 +237,286 @@ class KeywordGenerator:
 
         return related_keywords[:limit]
 
+    async def _generate_from_alphashop(
+        self,
+        category: str,
+        region: str,
+        limit: int,
+    ) -> list[KeywordResult]:
+        """Generate keywords using AlphaShop keyword search."""
+        client = await self._get_alphashop_client()
+        if client is None:
+            self.logger.warning(
+                "alphashop_keyword_generation_unavailable",
+                category=category,
+                region=region,
+                reason="missing_configuration_or_disabled",
+            )
+            return []
+
+        try:
+            response = await client.search_keywords(
+                platform=self.platform,
+                region=region,
+                keyword=category,
+                listing_time=self.listing_time,
+            )
+        except Exception as exc:
+            self.logger.error(
+                "alphashop_keyword_generation_failed",
+                category=category,
+                region=region,
+                error=str(exc),
+            )
+            return []
+
+        keyword_list = response.get("keyword_list") or []
+        results: list[KeywordResult] = []
+        seen: set[str] = set()
+
+        for item in keyword_list:
+            keyword = self._extract_keyword_text(item)
+            if not keyword:
+                continue
+            normalized = keyword.lower().strip()
+            if normalized in seen:
+                continue
+            if not self._is_category_relevant(keyword, category):
+                continue
+
+            trend_score = self._extract_trend_score_from_alphashop(item)
+            if trend_score < self.min_trend_score:
+                continue
+
+            seen.add(normalized)
+            results.append(
+                KeywordResult(
+                    keyword=keyword,
+                    search_volume=self._extract_search_volume_from_alphashop(item),
+                    trend_score=trend_score,
+                    competition_density=self._extract_competition_density_from_alphashop(item, keyword),
+                    related_keywords=self._extract_related_keywords_from_item(item, keyword),
+                    category=category,
+                    region=region,
+                )
+            )
+
+            if len(results) >= limit:
+                break
+
+        results.sort(key=lambda x: x.trend_score, reverse=True)
+        return results[:limit]
+
     async def _generate_from_pytrends(
         self,
         category: str,
         region: str,
         limit: int,
     ) -> list[KeywordResult]:
-        """Generate keywords using pytrends.
-
-        Strategy:
-        1. Get trending searches for the region
-        2. Filter by category relevance
-        3. Get interest over time for each keyword
-        4. Expand with related queries
-        5. Assess competition density
-        """
-
-        def _fetch_trending_keywords():
-            try:
-                from pytrends.request import TrendReq
-
-                pytrends = TrendReq(hl="en-US", tz=360)
-
-                # Get trending searches
-                geo = self._region_to_geo(region)
-                trending_df = pytrends.trending_searches(pn=geo)
-
-                if trending_df.empty:
-                    self.logger.warning(
-                        "no_trending_searches",
-                        region=region,
-                        category=category,
-                    )
-                    return []
-
-                # Get top trending keywords
-                trending_keywords = trending_df[0].tolist()[:limit * 2]  # Get more for filtering
-
-                results = []
-                for kw in trending_keywords:
-                    # Filter by category relevance (simple heuristic)
-                    if not self._is_category_relevant(kw, category):
-                        continue
-
-                    # Get interest over time
-                    try:
-                        geo_code = self._region_to_geo_code(region)
-                        pytrends.build_payload([kw], timeframe="today 3-m", geo=geo_code)
-                        interest_df = pytrends.interest_over_time()
-
-                        if interest_df.empty or kw not in interest_df.columns:
-                            continue
-
-                        # Calculate trend score (average interest)
-                        avg_interest = int(interest_df[kw].mean())
-
-                        if avg_interest < self.min_trend_score:
-                            continue
-
-                        # Estimate search volume
-                        search_volume = self._estimate_search_volume_from_interest(avg_interest)
-
-                        # Get related queries
-                        related_queries = pytrends.related_queries()
-                        related_keywords = []
-                        if kw in related_queries and related_queries[kw]["top"] is not None:
-                            related_keywords = (
-                                related_queries[kw]["top"]["query"].head(10).tolist()
-                            )
-
-                        # Assess competition density (heuristic based on keyword length)
-                        competition_density = self._heuristic_competition_assessment(kw)
-
-                        results.append(
-                            KeywordResult(
-                                keyword=kw,
-                                search_volume=search_volume,
-                                trend_score=avg_interest,
-                                competition_density=competition_density,
-                                related_keywords=related_keywords,
-                                category=category,
-                                region=region,
-                            )
-                        )
-
-                        if len(results) >= limit:
-                            break
-
-                    except Exception as e:
-                        self.logger.warning(
-                            "keyword_interest_fetch_failed",
-                            keyword=kw,
-                            error=str(e),
-                        )
-                        continue
-
-                # Sort by trend score (descending)
-                results.sort(key=lambda x: x.trend_score, reverse=True)
-                return results
-
-            except ImportError:
-                self.logger.error("pytrends_not_installed")
-                return self._fallback_keywords(category, region, limit)
-            except Exception as e:
-                self.logger.error(
-                    "pytrends_fetch_failed",
-                    category=category,
-                    region=region,
-                    error=str(e),
-                )
-                return self._fallback_keywords(category, region, limit)
-
-        return await asyncio.to_thread(_fetch_trending_keywords)
+        """Legacy compatibility shim retained for older tests and call sites."""
+        return await self._generate_from_alphashop(category, region, limit)
 
     async def _get_related_keywords(self, keyword: str, region: str) -> list[str]:
-        """Get related keywords using pytrends."""
+        """Get related keywords using AlphaShop keyword search."""
+        client = await self._get_alphashop_client()
+        if client is None:
+            return []
 
-        def _fetch_related():
-            try:
-                from pytrends.request import TrendReq
+        try:
+            response = await client.search_keywords(
+                platform=self.platform,
+                region=region,
+                keyword=keyword,
+                listing_time=self.listing_time,
+            )
+        except Exception as exc:
+            self.logger.warning(
+                "related_keywords_fetch_failed",
+                keyword=keyword,
+                region=region,
+                error=str(exc),
+            )
+            return []
 
-                pytrends = TrendReq(hl="en-US", tz=360)
-                geo_code = self._region_to_geo_code(region)
+        related_keywords: list[str] = []
+        seen = {keyword.lower().strip()}
 
-                pytrends.build_payload([keyword], timeframe="today 3-m", geo=geo_code)
-                related_queries = pytrends.related_queries()
+        for item in response.get("keyword_list") or []:
+            candidate = self._extract_keyword_text(item)
+            if not candidate:
+                continue
+            normalized = candidate.lower().strip()
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            related_keywords.append(candidate)
 
-                if keyword not in related_queries or related_queries[keyword]["top"] is None:
-                    return []
+        return related_keywords
 
-                # Get top related queries
-                related_keywords = related_queries[keyword]["top"]["query"].tolist()
-                return related_keywords
+    def _extract_keyword_text(self, item: dict[str, Any]) -> str | None:
+        """Extract keyword text from AlphaShop keyword result variants."""
+        for key in ("keyword", "query", "searchKeyword", "keywordName", "term", "title"):
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
 
-            except Exception as e:
-                self.logger.warning(
-                    "related_keywords_fetch_failed",
-                    keyword=keyword,
-                    error=str(e),
-                )
-                return []
+        radar = item.get("radar")
+        if isinstance(radar, dict):
+            for key in ("keyword", "query", "searchKeyword"):
+                value = radar.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
 
-        return await asyncio.to_thread(_fetch_related)
+        return None
+
+    def _extract_related_keywords_from_item(self, item: dict[str, Any], keyword: str) -> list[str]:
+        """Extract related keywords from a keyword result when present."""
+        candidates: list[str] = []
+
+        for key in ("relatedKeywords", "relatedKeywordList", "keywordList"):
+            value = item.get(key)
+            if isinstance(value, list):
+                for entry in value:
+                    if isinstance(entry, str) and entry.strip():
+                        candidates.append(entry.strip())
+                    elif isinstance(entry, dict):
+                        extracted = self._extract_keyword_text(entry)
+                        if extracted:
+                            candidates.append(extracted)
+
+        radar = item.get("radar")
+        if isinstance(radar, dict):
+            property_list = radar.get("propertyList")
+            if isinstance(property_list, list):
+                for entry in property_list:
+                    if isinstance(entry, dict):
+                        value = entry.get("value") or entry.get("name")
+                        if isinstance(value, str) and value.strip():
+                            candidates.append(value.strip())
+
+        seen = {keyword.lower().strip()}
+        unique: list[str] = []
+        for candidate in candidates:
+            normalized = candidate.lower().strip()
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                unique.append(candidate)
+        return unique[:10]
+
+    def _extract_search_volume_from_alphashop(self, item: dict[str, Any]) -> int:
+        """Map AlphaShop metrics into approximate monthly search volume."""
+        direct_volume = self._coerce_int(item.get("searchVolume"))
+        if direct_volume is not None:
+            return max(direct_volume, 100)
+
+        sales_info = item.get("salesInfo") if isinstance(item.get("salesInfo"), dict) else {}
+        sales_volume = self._coerce_int(sales_info.get("searchVolume"))
+        if sales_volume is not None:
+            return max(sales_volume, 100)
+
+        sold_cnt_30d = self._coerce_int(item.get("soldCnt30d"))
+        if sold_cnt_30d is None:
+            sold_cnt_30d = self._coerce_int(sales_info.get("soldCnt30d"))
+        if sold_cnt_30d is not None:
+            return max(sold_cnt_30d * 10, 100)
+
+        search_rank = self._coerce_int(item.get("searchRank"))
+        if search_rank is not None:
+            if search_rank <= 1000:
+                return 10000
+            if search_rank <= 5000:
+                return 5000
+            if search_rank <= 20000:
+                return 2000
+            return 500
+
+        opp_score = self._coerce_int(item.get("oppScore"))
+        if opp_score is not None:
+            return self._estimate_search_volume_from_interest(opp_score)
+
+        return 100
+
+    def _extract_trend_score_from_alphashop(self, item: dict[str, Any]) -> int:
+        """Extract a normalized 0-100 trend score from AlphaShop keyword data."""
+        opp_score = self._coerce_int(item.get("oppScore"))
+        if opp_score is not None:
+            return max(0, min(opp_score, 100))
+
+        rank_trends = self._extract_rank_trends(item)
+        if rank_trends:
+            avg_rank = sum(rank_trends) / len(rank_trends)
+            if avg_rank <= 100:
+                return 90
+            if avg_rank <= 500:
+                return 80
+            if avg_rank <= 2000:
+                return 65
+            if avg_rank <= 10000:
+                return 45
+            return 25
+
+        search_rank = self._coerce_int(item.get("searchRank"))
+        if search_rank is not None:
+            if search_rank <= 100:
+                return 90
+            if search_rank <= 1000:
+                return 75
+            if search_rank <= 5000:
+                return 60
+            if search_rank <= 20000:
+                return 40
+            return 20
+
+        return self.min_trend_score
+
+    def _extract_competition_density_from_alphashop(self, item: dict[str, Any], keyword: str) -> str:
+        """Map AlphaShop keyword metrics into competition density buckets."""
+        search_rank = self._coerce_int(item.get("searchRank"))
+        if search_rank is not None:
+            if search_rank <= 1000:
+                return "high"
+            if search_rank <= 10000:
+                return "medium"
+            return "low"
+
+        opp_score = self._coerce_int(item.get("oppScore"))
+        if opp_score is not None:
+            if opp_score >= 80:
+                return "high"
+            if opp_score >= 50:
+                return "medium"
+            return "low"
+
+        return self._heuristic_competition_assessment(keyword)
+
+    def _extract_rank_trends(self, item: dict[str, Any]) -> list[int]:
+        """Extract numeric rank trend points from AlphaShop result variants."""
+        raw = item.get("rankTrends")
+        if not isinstance(raw, list):
+            return []
+
+        values: list[int] = []
+        for entry in raw:
+            if isinstance(entry, (int, float)):
+                values.append(int(entry))
+            elif isinstance(entry, str):
+                try:
+                    values.append(int(float(entry)))
+                except Exception:
+                    continue
+            elif isinstance(entry, dict):
+                for key in ("rank", "value", "searchRank"):
+                    candidate = self._coerce_int(entry.get(key))
+                    if candidate is not None:
+                        values.append(candidate)
+                        break
+        return values
 
     def _is_category_relevant(self, keyword: str, category: str) -> bool:
-        """Check if keyword is relevant to category (simple heuristic).
-
-        This is a basic implementation. In production, you might want to use
-        a more sophisticated approach (e.g., LLM classification, keyword mapping).
-        """
+        """Check if keyword is relevant to category."""
         keyword_lower = keyword.lower()
         category_lower = category.lower()
 
-        # Category-specific keywords
         category_keywords = {
             "electronics": [
                 "phone",
@@ -468,45 +580,31 @@ class KeywordGenerator:
             ],
         }
 
-        # Check if any category keyword is in the search keyword
         if category_lower in category_keywords:
             for cat_kw in category_keywords[category_lower]:
                 if cat_kw in keyword_lower:
                     return True
 
-        # Default: accept all (can be made stricter)
         return True
 
     def _estimate_search_volume_from_interest(self, avg_interest: int) -> int:
-        """Estimate monthly search volume from Google Trends interest score.
-
-        This is a rough estimation. Actual search volume requires Google Ads API.
-        """
+        """Estimate monthly search volume from normalized interest score."""
         if avg_interest >= 80:
             return 10000
-        elif avg_interest >= 60:
+        if avg_interest >= 60:
             return 5000
-        elif avg_interest >= 40:
+        if avg_interest >= 40:
             return 2000
-        elif avg_interest >= 20:
+        if avg_interest >= 20:
             return 500
-        elif avg_interest >= 10:
+        if avg_interest >= 10:
             return 200
-        else:
-            return 100
+        return 100
 
     def _heuristic_competition_assessment(self, keyword: str) -> str:
-        """Assess competition density using heuristic rules.
-
-        Rules:
-        - Generic keywords (1-2 words) → HIGH
-        - Specific keywords (3-4 words) → MEDIUM
-        - Long-tail keywords (5+ words) → LOW
-        - Brand names → HIGH
-        """
+        """Assess competition density using heuristic rules."""
         word_count = len(keyword.split())
 
-        # Check for brand names (common brands)
         brand_keywords = [
             "iphone",
             "samsung",
@@ -521,19 +619,14 @@ class KeywordGenerator:
         if any(brand in keyword.lower() for brand in brand_keywords):
             return "high"
 
-        # Word count heuristic
         if word_count <= 2:
             return "high"
-        elif word_count <= 4:
+        if word_count <= 4:
             return "medium"
-        else:
-            return "low"
+        return "low"
 
     def _region_to_geo(self, region: str) -> str:
-        """Convert region code to pytrends geo code for trending_searches.
-
-        trending_searches uses country names like 'united_states'.
-        """
+        """Legacy compatibility mapping retained for tests and older code paths."""
         region_map = {
             "US": "united_states",
             "UK": "united_kingdom",
@@ -544,23 +637,17 @@ class KeywordGenerator:
             "CA": "canada",
             "AU": "australia",
         }
-        return region_map.get(region.upper(), "united_states")
+        return region_map.get((region or "US").upper(), "united_states")
 
     def _region_to_geo_code(self, region: str) -> str:
-        """Convert region code to pytrends geo code for build_payload.
-
-        build_payload uses ISO country codes like 'US', 'GB'.
-        """
+        """Legacy compatibility mapping retained for tests and older code paths."""
         region_map = {
-            "UK": "GB",  # UK → GB
+            "UK": "GB",
         }
-        return region_map.get(region.upper(), region.upper())
+        return region_map.get((region or "US").upper(), (region or "US").upper())
 
     def _fallback_keywords(self, category: str, region: str, limit: int) -> list[KeywordResult]:
-        """Fallback keywords when pytrends fails.
-
-        Returns a predefined list of popular keywords by category.
-        """
+        """Fallback keywords when AlphaShop is unavailable."""
         self.logger.warning(
             "using_fallback_keywords",
             category=category,
@@ -641,12 +728,12 @@ class KeywordGenerator:
                 ]
                 return results
 
-        except Exception as e:
+        except Exception as exc:
             self.logger.warning(
                 "cache_get_failed",
                 category=category,
                 region=region,
-                error=str(e),
+                error=str(exc),
             )
 
         return None
@@ -677,10 +764,27 @@ class KeywordGenerator:
                 ttl=self.cache_ttl_seconds,
             )
 
-        except Exception as e:
+        except Exception as exc:
             self.logger.warning(
                 "cache_save_failed",
                 category=category,
                 region=region,
-                error=str(e),
+                error=str(exc),
             )
+
+    def _coerce_int(self, value: Any) -> int | None:
+        """Convert value to int when possible."""
+        if value is None or value == "":
+            return None
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+        if isinstance(value, str):
+            try:
+                return int(float(value))
+            except Exception:
+                return None
+        return None

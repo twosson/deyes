@@ -52,7 +52,33 @@ class Settings(BaseSettings):
     scraper_browser_failure_threshold: int = 3
     scraper_browser_cleanup_interval_seconds: int = 60
 
-    # TMAPI 1688 API (primary)
+    # AlphaShop API (primary for keyword research and 1688 supplier discovery)
+    alphashop_base_url: str = Field(
+        default="https://api.alphashop.cn",
+        validation_alias=AliasChoices("ALPHASHOP_BASE_URL"),
+    )
+    alphashop_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("ALPHASHOP_API_KEY", "ALPHASHOP_ACCESS_KEY"),
+    )
+    alphashop_secret_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("ALPHASHOP_SECRET_KEY"),
+    )
+    alphashop_timeout: int = Field(
+        default=30,
+        validation_alias=AliasChoices("ALPHASHOP_TIMEOUT"),
+    )
+    alphashop_max_retries: int = Field(
+        default=3,
+        validation_alias=AliasChoices("ALPHASHOP_MAX_RETRIES"),
+    )
+    alphashop_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("ALPHASHOP_ENABLED"),
+    )
+
+    # TMAPI 1688 API (deprecated, replaced by AlphaShop)
     tmapi_api_token: str = Field(
         default="",
         validation_alias=AliasChoices("TMAPI_API_TOKEN", "TMAPI_TOKEN"),
@@ -117,7 +143,7 @@ class Settings(BaseSettings):
     demand_validation_helium10_api_key: str = ""
     demand_validation_cache_ttl_seconds: int = 86400  # 24 hours
 
-    # Keyword Generation (Phase 3 Enhancement)
+    # Keyword Generation (Phase 3 Enhancement) - AlphaShop-based
     enable_keyword_generation: bool = True
     keyword_generation_categories: list[str] = Field(
         default_factory=lambda: ["electronics", "fashion", "home", "beauty", "sports"]
@@ -127,6 +153,14 @@ class Settings(BaseSettings):
     keyword_generation_min_trend_score: int = 20
     keyword_generation_cache_ttl_seconds: int = 86400  # 24 hours
     keyword_generation_auto_trigger_selection: bool = False  # Auto-trigger product selection
+    keyword_generation_platform: str = Field(
+        default="amazon",
+        validation_alias=AliasChoices("KEYWORD_GENERATION_PLATFORM"),
+    )  # "amazon" or "tiktok"
+    keyword_generation_listing_time: str = Field(
+        default="180",
+        validation_alias=AliasChoices("KEYWORD_GENERATION_LISTING_TIME"),
+    )  # "90" or "180" days
 
     # Seasonal Calendar (Phase 4 Enhancement)
     enable_seasonal_boost: bool = True

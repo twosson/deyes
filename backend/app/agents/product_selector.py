@@ -28,6 +28,7 @@ class ProductSelectorAgent(BaseAgent):
     - 90-day lookahead for upcoming events
     - Category-specific boost factors
     - Prioritizes products for upcoming holidays
+    - Fails fast when no validated keywords are available
     """
 
     def __init__(
@@ -38,7 +39,6 @@ class ProductSelectorAgent(BaseAgent):
         demand_discovery_service: Optional[DemandDiscoveryService] = None,
         enable_demand_validation: bool = True,
         enable_seasonal_boost: bool = True,
-        allow_keyword_fallback: Optional[bool] = None,
     ):
         super().__init__("product_selector")
         self.settings = get_settings().model_copy(deep=True)
@@ -58,11 +58,6 @@ class ProductSelectorAgent(BaseAgent):
         self.enable_seasonal_boost = enable_seasonal_boost
         self.require_demand_discovery = (
             self.settings.product_selection_require_demand_discovery and enable_demand_validation
-        )
-        self.allow_keyword_fallback = (
-            self.settings.product_selection_allow_validated_seed_fallback
-            if allow_keyword_fallback is None
-            else allow_keyword_fallback
         )
 
     async def execute(self, context: AgentContext) -> AgentResult:
@@ -91,7 +86,6 @@ class ProductSelectorAgent(BaseAgent):
                     keywords=keywords,
                     region=region,
                     platform=platform.value,
-                    allow_fallback=self.allow_keyword_fallback,
                     max_keywords=max_candidates,
                 )
                 demand_discovery_payload = discovery_result.to_dict()
@@ -116,7 +110,6 @@ class ProductSelectorAgent(BaseAgent):
                 )
 
                 if not validated_keywords:
-                    skipped_reason = "no_validated_keywords_available"
                     self.logger.warning(
                         "no_validated_keywords_available",
                         strategy_run_id=str(context.strategy_run_id),
@@ -137,14 +130,8 @@ class ProductSelectorAgent(BaseAgent):
                         candidate_count_per_discovery_mode=0,
                         validated_keywords_count=len(discovery_result.validated_keywords),
                     )
-                    return AgentResult(
-                        success=True,
-                        output_data={
-                            "candidate_ids": [],
-                            "count": 0,
-                            "demand_discovery": demand_discovery_payload,
-                            "skipped_reason": skipped_reason,
-                        },
+                    raise RuntimeError(
+                        "No validated keywords available for product selection"
                     )
 
             # Initialize source adapter if not provided

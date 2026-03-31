@@ -218,27 +218,6 @@ class TestKeywordGenerator:
         assert generator._is_category_relevant("running shoes", "fashion") is True
         assert generator._is_category_relevant("leather bag", "fashion") is True
 
-    def test_fallback_keywords_electronics(self):
-        """Test fallback keywords for electronics."""
-        generator = KeywordGenerator()
-
-        results = generator._fallback_keywords("electronics", "US", 5)
-
-        assert len(results) == 5
-        assert all(isinstance(r, KeywordResult) for r in results)
-        assert results[0].keyword == "wireless earbuds"
-        assert results[0].category == "electronics"
-        assert results[0].region == "US"
-
-    def test_fallback_keywords_unknown_category(self):
-        """Test fallback keywords for unknown category."""
-        generator = KeywordGenerator()
-
-        results = generator._fallback_keywords("unknown", "US", 5)
-
-        assert len(results) == 5
-        assert results[0].keyword == "wireless earbuds"
-
     @pytest.mark.asyncio
     async def test_generate_trending_keywords_with_alphashop(self):
         """Test generate_trending_keywords with AlphaShop data."""
@@ -300,38 +279,34 @@ class TestKeywordGenerator:
         assert results[0].keyword == "wireless earbuds"
 
     @pytest.mark.asyncio
-    async def test_generate_trending_keywords_fallback_when_alphashop_empty(self):
-        """Test fallback keywords are used when AlphaShop returns no data."""
+    async def test_generate_trending_keywords_raises_when_alphashop_empty(self):
+        """Test RuntimeError is raised when AlphaShop returns no data."""
         mock_client = AsyncMock()
         mock_client.search_keywords.return_value = {"keyword_list": []}
 
         generator = KeywordGenerator(alphashop_client=mock_client)
 
-        results = await generator.generate_trending_keywords(
-            category="electronics",
-            region="US",
-            limit=3,
-        )
-
-        assert len(results) == 3
-        assert results[0].keyword == "wireless earbuds"
+        with pytest.raises(RuntimeError, match="Keyword generation failed"):
+            await generator.generate_trending_keywords(
+                category="electronics",
+                region="US",
+                limit=3,
+            )
 
     @pytest.mark.asyncio
-    async def test_generate_trending_keywords_fallback_on_error(self):
-        """Test fallback keywords are used when AlphaShop raises error."""
+    async def test_generate_trending_keywords_raises_on_error(self):
+        """Test RuntimeError is raised when AlphaShop raises error."""
         mock_client = AsyncMock()
         mock_client.search_keywords.side_effect = Exception("API error")
 
         generator = KeywordGenerator(alphashop_client=mock_client)
 
-        results = await generator.generate_trending_keywords(
-            category="electronics",
-            region="US",
-            limit=3,
-        )
-
-        assert len(results) == 3
-        assert results[0].keyword == "wireless earbuds"
+        with pytest.raises(RuntimeError, match="Keyword generation failed"):
+            await generator.generate_trending_keywords(
+                category="electronics",
+                region="US",
+                limit=3,
+            )
 
     @pytest.mark.asyncio
     async def test_expand_keyword_with_alphashop(self):

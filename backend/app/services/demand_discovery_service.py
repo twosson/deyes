@@ -4,7 +4,7 @@ This service orchestrates the complete demand discovery flow:
 1. User-provided keywords → validate
 2. If user keywords all fail and runtime generation is enabled → generate alternatives → validate
 3. If no user keywords → generate trending keywords → validate
-4. If generation fails or returns no valid keywords → try fallback seeds → validate
+4. If generation fails or returns no valid keywords → fail fast
 5. Return validated keywords with structured metadata
 
 All 1688 searches MUST go through this service when demand discovery is enabled.
@@ -16,7 +16,6 @@ from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.services.demand_validator import DemandValidationResult, DemandValidator
 from app.services.keyword_generator import KeywordGenerator
-from app.services.seed_fallback_provider import SeedFallbackProvider
 
 logger = get_logger(__name__)
 
@@ -66,7 +65,6 @@ class DemandDiscoveryService:
         self,
         demand_validator: Optional[DemandValidator] = None,
         keyword_generator: Optional[KeywordGenerator] = None,
-        seed_fallback_provider: Optional[SeedFallbackProvider] = None,
     ):
         self.settings = get_settings().model_copy(deep=True)
         self.demand_validator = demand_validator or DemandValidator(
@@ -81,11 +79,6 @@ class DemandDiscoveryService:
             enable_cache=self.settings.enable_keyword_generation,
             min_trend_score=self.settings.keyword_generation_min_trend_score,
         )
-        self.seed_fallback_provider = seed_fallback_provider or SeedFallbackProvider(
-            cold_start_seeds=self.settings.tmapi_1688_cold_start_seeds,
-            seasonal_seed_limit=self.settings.tmapi_1688_seasonal_seed_limit,
-            category_hotword_limit=self.settings.tmapi_1688_suggest_limit_per_seed,
-        )
         self.logger = logger
 
     async def discover_keywords(
@@ -95,7 +88,6 @@ class DemandDiscoveryService:
         keywords: Optional[list[str]] = None,
         region: Optional[str] = None,
         platform: Optional[str] = None,
-        allow_fallback: bool = True,
         max_keywords: int = 10,
     ) -> DemandDiscoveryResult:
         """Discover and validate keywords for product selection."""
@@ -108,7 +100,6 @@ class DemandDiscoveryService:
             keywords=normalized_keywords,
             region=normalized_region,
             platform=platform,
-            allow_fallback=allow_fallback,
             max_keywords=max_keywords,
             user_keywords_count=len(normalized_keywords),
         )
@@ -190,45 +181,7 @@ class DemandDiscoveryService:
                 return result
             accumulated_rejections.extend(generated_result.rejected_keywords)
 
-        # 3. Validated fallback seeds.
-        if allow_fallback and self.settings.product_selection_allow_validated_seed_fallback:
-            fallback_result = await self._discover_from_fallback_seeds(
-                category=category,
-                region=normalized_region,
-                platform=platform,
-                max_keywords=max_keywords,
-            )
-            result = DemandDiscoveryResult(
-                validated_keywords=fallback_result.validated_keywords,
-                rejected_keywords=accumulated_rejections + fallback_result.rejected_keywords,
-                discovery_mode=fallback_result.discovery_mode,
-                fallback_used=fallback_result.fallback_used,
-                degraded=True,
-            )
-            self.logger.info(
-                "demand_discovery_metrics",
-                category=category,
-                region=normalized_region,
-                platform=platform,
-                discovery_mode=result.discovery_mode,
-                success=bool(result.validated_keywords),
-                skip=not bool(result.validated_keywords),
-                fallback_used=result.fallback_used,
-                degraded=result.degraded,
-                generated_recovery=False,
-                validated_fallback=bool(result.validated_keywords),
-                validated_keywords_count=len(result.validated_keywords),
-                rejected_keywords_count=len(result.rejected_keywords),
-                avg_validated_keywords_count=len(result.validated_keywords),
-                discovery_success_rate=1.0 if result.validated_keywords else 0.0,
-                generated_recovery_rate=0.0,
-                validated_fallback_rate=1.0 if result.validated_keywords else 0.0,
-                skip_rate=1.0 if not result.validated_keywords else 0.0,
-                selection_triggered_per_category=1 if result.validated_keywords else 0,
-            )
-            return result
-
-        # 4. Nothing validated.
+        # 3. Nothing validated.
         self.logger.warning(
             "demand_discovery_no_valid_keywords",
             category=category,
@@ -324,65 +277,6 @@ class DemandDiscoveryService:
             platform=platform,
             max_keywords=max_keywords,
             discovery_mode="generated",
-        )
-
-    async def _discover_from_fallback_seeds(
-        self,
-        *,
-        category: Optional[str],
-        region: str,
-        platform: Optional[str],
-        max_keywords: int,
-    ) -> DemandDiscoveryResult:
-        """Discover keywords from fallback seed candidates and validate them."""
-        self.logger.info(
-            "demand_discovery_using_fallback_seeds",
-            category=category,
-            region=region,
-        )
-
-        try:
-            seed_candidates = await self.seed_fallback_provider.get_candidate_fallback_keywords(
-                category=category,
-                region=region,
-                limit=max_keywords * 2,
-            )
-        except Exception as exc:
-            self.logger.error(
-                "demand_discovery_fallback_failed",
-                category=category,
-                region=region,
-                error=str(exc),
-            )
-            return DemandDiscoveryResult(
-                validated_keywords=[],
-                rejected_keywords=[],
-                discovery_mode="fallback",
-                fallback_used=True,
-                degraded=True,
-            )
-
-        if not seed_candidates:
-            return DemandDiscoveryResult(
-                validated_keywords=[],
-                rejected_keywords=[],
-                discovery_mode="fallback",
-                fallback_used=True,
-                degraded=True,
-            )
-
-        source_map = {keyword: f"fallback_{source}" for keyword, source in seed_candidates}
-        return await self._validate_keywords(
-            keywords=[keyword for keyword, _ in seed_candidates],
-            source="fallback",
-            category=category,
-            region=region,
-            platform=platform,
-            max_keywords=max_keywords,
-            discovery_mode="fallback",
-            source_map=source_map,
-            fallback_used=True,
-            degraded=True,
         )
 
     async def _validate_keywords(

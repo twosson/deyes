@@ -8,7 +8,7 @@ Features:
 - Expand keywords using AlphaShop related keyword variants
 - Cache results in Redis (24h TTL)
 - Support multiple regions
-- Preserve fallback keyword generation when AlphaShop is unavailable
+- Fail fast when AlphaShop is unavailable or returns no valid keywords
 """
 from __future__ import annotations
 
@@ -119,8 +119,18 @@ class KeywordGenerator:
         )
 
         keywords = await self._generate_from_alphashop(category, region, limit)
+
         if not keywords:
-            keywords = self._fallback_keywords(category, region, limit)
+            self.logger.error(
+                "keyword_generation_failed_no_results",
+                category=category,
+                region=region,
+                reason="AlphaShop returned no valid keywords",
+            )
+            raise RuntimeError(
+                f"Keyword generation failed for category={category}, region={region}: "
+                f"AlphaShop returned no valid keywords"
+            )
 
         if self.enable_cache and self.redis_client:
             await self._save_to_cache(category, region, keywords)
@@ -645,56 +655,6 @@ class KeywordGenerator:
             "UK": "GB",
         }
         return region_map.get((region or "US").upper(), (region or "US").upper())
-
-    def _fallback_keywords(self, category: str, region: str, limit: int) -> list[KeywordResult]:
-        """Fallback keywords when AlphaShop is unavailable."""
-        self.logger.warning(
-            "using_fallback_keywords",
-            category=category,
-            region=region,
-        )
-
-        fallback_data = {
-            "electronics": [
-                ("wireless earbuds", 5000, 75, "medium"),
-                ("phone case", 8000, 80, "high"),
-                ("laptop stand", 2000, 60, "medium"),
-                ("usb c cable", 6000, 70, "high"),
-                ("bluetooth speaker", 4000, 65, "medium"),
-            ],
-            "fashion": [
-                ("summer dress", 3000, 70, "medium"),
-                ("running shoes", 7000, 80, "high"),
-                ("leather bag", 2500, 60, "medium"),
-                ("sunglasses", 5000, 75, "high"),
-                ("winter jacket", 4000, 65, "medium"),
-            ],
-            "home": [
-                ("storage organizer", 2000, 60, "medium"),
-                ("led lights", 4000, 70, "medium"),
-                ("kitchen gadgets", 3000, 65, "medium"),
-                ("throw pillow", 2500, 55, "medium"),
-                ("wall decor", 3500, 60, "medium"),
-            ],
-        }
-
-        keywords_data = fallback_data.get(category.lower(), fallback_data["electronics"])
-
-        results = []
-        for kw, vol, score, comp in keywords_data[:limit]:
-            results.append(
-                KeywordResult(
-                    keyword=kw,
-                    search_volume=vol,
-                    trend_score=score,
-                    competition_density=comp,
-                    related_keywords=[],
-                    category=category,
-                    region=region,
-                )
-            )
-
-        return results
 
     def _build_cache_key(self, category: str, region: str) -> str:
         """Build cache key for keyword generation results."""

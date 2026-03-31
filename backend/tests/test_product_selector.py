@@ -114,8 +114,8 @@ async def test_product_selector_uses_demand_discovery_before_fetching():
 
 
 @pytest.mark.asyncio
-async def test_product_selector_skips_fetch_when_no_validated_keywords():
-    """Selector should skip source fetch when demand discovery returns no validated keywords."""
+async def test_product_selector_fails_when_no_validated_keywords():
+    """Selector should fail when demand discovery returns no validated keywords."""
     mock_adapter = AsyncMock()
     mock_supplier_matcher = AsyncMock()
 
@@ -168,10 +168,8 @@ async def test_product_selector_skips_fetch_when_no_validated_keywords():
 
     result = await agent.execute(context)
 
-    assert result.success is True
-    assert result.output_data["count"] == 0
-    assert result.output_data["skipped_reason"] == "no_validated_keywords_available"
-    assert result.output_data["demand_discovery"]["degraded"] is True
+    assert result.success is False
+    assert result.error_message == "No validated keywords available for product selection"
     mock_adapter.fetch_products.assert_not_called()
     agent.logger.info.assert_any_call(
         "product_selection_metrics",

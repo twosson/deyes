@@ -54,8 +54,8 @@ class RiskControllerAgent(BaseAgent):
 
                 # Prepare product data for risk assessment
                 product_data = {
-                    "title": candidate.title,
-                    "category": candidate.category,
+                    "title": candidate.title or "",
+                    "category": candidate.category or "",
                     "platform_price": float(candidate.platform_price)
                     if candidate.platform_price
                     else None,

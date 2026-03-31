@@ -56,7 +56,7 @@ class BrandKeywordRule(RiskRule):
         )
 
     def evaluate(self, product_data: dict) -> tuple[bool, Optional[str]]:
-        title = product_data.get("title", "").lower()
+        title = str(product_data.get("title") or "").lower()
         for brand in self.BRAND_KEYWORDS:
             if brand in title:
                 return True, f"Brand keyword detected: {brand}"
@@ -84,8 +84,8 @@ class ForbiddenCategoryRule(RiskRule):
         )
 
     def evaluate(self, product_data: dict) -> tuple[bool, Optional[str]]:
-        category = product_data.get("category", "").lower()
-        title = product_data.get("title", "").lower()
+        category = str(product_data.get("category") or "").lower()
+        title = str(product_data.get("title") or "").lower()
 
         for forbidden in self.FORBIDDEN_CATEGORIES:
             if forbidden in category or forbidden in title:
@@ -104,7 +104,7 @@ class SuspiciousPriceRule(RiskRule):
         )
 
     def evaluate(self, product_data: dict) -> tuple[bool, Optional[str]]:
-        title = product_data.get("title", "").lower()
+        title = str(product_data.get("title") or "").lower()
         platform_price = product_data.get("platform_price")
 
         # Check if title contains luxury/brand keywords and price is very low
@@ -149,7 +149,7 @@ class CompetitionDensityRule(RiskRule):
         Returns:
             Tuple of (always True, reason with score)
         """
-        competition_density = product_data.get("competition_density", "unknown").lower()
+        competition_density = str(product_data.get("competition_density") or "unknown").lower()
 
         # Map density to risk score
         density_scores = {

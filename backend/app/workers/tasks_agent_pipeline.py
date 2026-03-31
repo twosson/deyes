@@ -4,6 +4,7 @@ from uuid import UUID
 from app.agents.director_workflow import DirectorWorkflow
 from app.core.logging import get_logger
 from app.db.session import get_db_context
+from app.workers import run_async
 from app.workers.celery_app import celery_app
 
 logger = get_logger(__name__)
@@ -12,8 +13,6 @@ logger = get_logger(__name__)
 @celery_app.task(name="tasks.start_discovery_pipeline", bind=True)
 def start_discovery_pipeline(self, strategy_run_id: str):
     """Start the discovery pipeline for a strategy run."""
-    import asyncio
-
     logger.info("task_started", task_id=self.request.id, strategy_run_id=strategy_run_id)
 
     async def run_pipeline():
@@ -26,7 +25,7 @@ def start_discovery_pipeline(self, strategy_run_id: str):
             return result
 
     try:
-        result = asyncio.run(run_pipeline())
+        result = run_async(run_pipeline())
         logger.info(
             "task_completed",
             task_id=self.request.id,

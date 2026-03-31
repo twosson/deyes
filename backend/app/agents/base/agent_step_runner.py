@@ -44,11 +44,13 @@ class AgentStepRunner:
         """
         agent_run_id = uuid4()
         started_at = datetime.now(timezone.utc)
+        # Extract strategy_run_id early to avoid ORM lazy load in exception handlers
+        strategy_run_id = strategy_run.id
 
         # Create agent run record
         agent_run = AgentRun(
             id=agent_run_id,
-            strategy_run_id=strategy_run.id,
+            strategy_run_id=strategy_run_id,
             step_name=step_name,
             agent_name=agent.name,
             status=AgentRunStatus.RUNNING,
@@ -60,7 +62,7 @@ class AgentStepRunner:
         # Create started event
         event = RunEvent(
             id=uuid4(),
-            strategy_run_id=strategy_run.id,
+            strategy_run_id=strategy_run_id,
             agent_run_id=agent_run_id,
             event_type=f"agent.{step_name}.started",
             event_payload={"agent": agent.name},
@@ -71,7 +73,7 @@ class AgentStepRunner:
         try:
             # Execute agent
             context = AgentContext(
-                strategy_run_id=strategy_run.id,
+                strategy_run_id=strategy_run_id,
                 db=db,
                 input_data=input_data,
             )
@@ -90,7 +92,7 @@ class AgentStepRunner:
             # Create completion event
             completion_event = RunEvent(
                 id=uuid4(),
-                strategy_run_id=strategy_run.id,
+                strategy_run_id=strategy_run_id,
                 agent_run_id=agent_run_id,
                 event_type=f"agent.{step_name}.completed",
                 event_payload={

@@ -2,13 +2,13 @@
 
 Phase 3 Enhancement: Nightly keyword generation for automated product discovery.
 """
-import asyncio
 from typing import Optional
 from uuid import UUID
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.services.keyword_generator import KeywordGenerator
+from app.workers import run_async
 from app.workers.celery_app import celery_app
 
 logger = get_logger(__name__)
@@ -256,7 +256,7 @@ def generate_trending_keywords(
         }
 
     try:
-        result = asyncio.run(run_generation())
+        result = run_async(run_generation())
         logger.info(
             "task_completed",
             task_id=task_id,
@@ -335,7 +335,7 @@ def trigger_keyword_based_selection(
             }
 
     try:
-        result = asyncio.run(run_selection())
+        result = run_async(run_selection())
         logger.info(
             "task_completed",
             task_id=task_id,

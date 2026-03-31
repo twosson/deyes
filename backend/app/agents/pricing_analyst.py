@@ -104,7 +104,10 @@ class PricingAnalystAgent(BaseAgent):
                 demand_discovery_metadata = candidate.demand_discovery_metadata or {}
 
                 # Prefer policy-aware pricing when source platform is available
-                if candidate.source_platform:
+                # Note: source_platform is where we discovered the product (e.g., alibaba_1688)
+                # but pricing needs the target selling platform (e.g., temu, amazon)
+                # For now, use fallback pricing since we don't have target platform at this stage
+                if False:  # Disabled until we have target_platform in candidate
                     # Region can be extracted from normalized attributes or raw payload if available
                     region = normalized_attributes.get("region")
                     if not region and candidate.raw_payload:
@@ -114,7 +117,7 @@ class PricingAnalystAgent(BaseAgent):
                         db=context.db,
                         supplier_price=selection_result.selected_path.supplier_price,
                         platform_price=candidate.platform_price,
-                        platform=candidate.source_platform.value,
+                        platform=None,  # Would need target_platform here
                         region=region,
                         category=candidate.category,
                         competition_density=normalized_attributes.get("competition_density"),

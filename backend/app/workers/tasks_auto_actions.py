@@ -6,7 +6,6 @@ Automated tasks for:
 - Daily auto-asset-switch for low CTR assets
 - Temu RPA publish fallback
 """
-import asyncio
 from uuid import UUID
 
 from sqlalchemy import select
@@ -17,6 +16,7 @@ from app.db.models import CandidateProduct, PlatformListing, RunEvent
 from app.db.session import get_db_context
 from app.services.auto_action_engine import AutoActionEngine
 from app.services.rpa_publisher import RPAPublisher, RPAResult
+from app.workers import run_async
 from app.workers.celery_app import celery_app
 
 logger = get_logger(__name__)
@@ -147,7 +147,7 @@ def auto_reprice_all_listings(self) -> dict:
     task_id = self.request.id
     logger.info("task_started", task_id=task_id, task_name="auto_reprice_all_listings")
     try:
-        result = asyncio.run(_run_auto_reprice_all())
+        result = run_async(_run_auto_reprice_all())
         logger.info(
             "task_completed",
             task_id=task_id,
@@ -174,7 +174,7 @@ def auto_pause_all_listings(self) -> dict:
     task_id = self.request.id
     logger.info("task_started", task_id=task_id, task_name="auto_pause_all_listings")
     try:
-        result = asyncio.run(_run_auto_pause_all())
+        result = run_async(_run_auto_pause_all())
         logger.info(
             "task_completed",
             task_id=task_id,
@@ -201,7 +201,7 @@ def auto_asset_switch_all_listings(self) -> dict:
     task_id = self.request.id
     logger.info("task_started", task_id=task_id, task_name="auto_asset_switch_all_listings")
     try:
-        result = asyncio.run(_run_auto_asset_switch_all())
+        result = run_async(_run_auto_asset_switch_all())
         logger.info(
             "task_completed",
             task_id=task_id,
@@ -423,7 +423,7 @@ def temu_rpa_publish_fallback(self, listing_id: str) -> dict:
     task_id = self.request.id
     logger.info("task_started", task_id=task_id, task_name="temu_rpa_publish_fallback", listing_id=listing_id)
     try:
-        result = asyncio.run(_run_temu_rpa_fallback(UUID(listing_id)))
+        result = run_async(_run_temu_rpa_fallback(UUID(listing_id)))
         logger.info(
             "task_completed",
             task_id=task_id,

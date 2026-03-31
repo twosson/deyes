@@ -4,7 +4,6 @@ Automated tasks for:
 - Daily listing performance metrics collection from platform APIs
 - Daily asset performance metrics collection (stub for future)
 """
-import asyncio
 from datetime import date, timedelta
 from uuid import UUID
 
@@ -19,6 +18,7 @@ from app.core.logging import get_logger
 from app.db.models import PlatformListing
 from app.db.session import get_db_context
 from app.services.listing_metrics_service import ListingMetricsService
+from app.workers import run_async
 from app.workers.celery_app import celery_app
 
 logger = get_logger(__name__)
@@ -154,7 +154,7 @@ def collect_listing_performance_daily(self) -> dict:
     task_id = self.request.id
     logger.info("task_started", task_id=task_id, task_name="collect_listing_performance_daily")
     try:
-        result = asyncio.run(_collect_listing_performance_daily())
+        result = run_async(_collect_listing_performance_daily())
         logger.info(
             "task_completed",
             task_id=task_id,
@@ -181,7 +181,7 @@ def collect_asset_performance_daily(self) -> dict:
     task_id = self.request.id
     logger.info("task_started", task_id=task_id, task_name="collect_asset_performance_daily")
     try:
-        result = asyncio.run(_collect_asset_performance_daily())
+        result = run_async(_collect_asset_performance_daily())
         logger.info(
             "task_completed",
             task_id=task_id,

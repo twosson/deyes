@@ -1,11 +1,11 @@
 """Celery tasks for platform sync."""
-import asyncio
 from uuid import UUID
 
 from app.agents.base.agent import AgentContext
 from app.agents.platform_publisher import PlatformSyncAgent
 from app.core.logging import get_logger
 from app.db.session import get_db_context
+from app.workers import run_async
 from app.workers.celery_app import celery_app
 
 logger = get_logger(__name__)
@@ -39,11 +39,7 @@ def _build_context_input(
 def _run_sync_task(
     sync_type: str, start_date: str | None = None, end_date: str | None = None
 ) -> dict:
-    """Execute a platform sync task synchronously within a Celery worker thread.
-
-    This is called from a Celery task (which runs in a worker thread, not an async
-    context) and uses asyncio.run() to execute the async agent logic.
-    """
+    """Execute a platform sync task on the worker process async loop."""
     async def run():
         async with get_db_context() as db:
             agent = PlatformSyncAgent()
@@ -59,8 +55,7 @@ def _run_sync_task(
                 "error_message": result.error_message,
             }
 
-    # asyncio.run is safe here because Celery worker threads have no active event loop.
-    return asyncio.run(run())
+    return run_async(run())
 
 
 @celery_app.task(name="tasks.sync_all_listings_status", bind=True)

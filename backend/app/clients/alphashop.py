@@ -9,9 +9,12 @@ Features:
 - Shared HTTP transport with retry handling
 - Response normalization for keyword search, supplier selection, supplier search,
   and inquiry task APIs
+- Exponential backoff with jitter for retryable errors
 """
 from __future__ import annotations
 
+import asyncio
+import random
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -228,6 +231,7 @@ class AlphaShopClient:
     async def _request(self, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
         """Make authenticated POST request to AlphaShop API."""
         client = await self._get_http_client()
+        settings = get_settings()
         last_error: Exception | None = None
 
         for attempt in range(1, max(self.max_retries, 1) + 1):
@@ -253,6 +257,17 @@ class AlphaShopClient:
                 )
                 if code not in self.RETRYABLE_RESULT_CODES or attempt >= max(self.max_retries, 1):
                     raise
+                # Exponential backoff with jitter for retryable errors
+                base_delay = settings.alphashop_retry_base_delay_seconds
+                delay = base_delay * (2 ** (attempt - 1)) + random.uniform(0, 0.5)
+                logger.debug(
+                    "alphashop_retry_backoff",
+                    endpoint=endpoint,
+                    attempt=attempt,
+                    delay_seconds=round(delay, 3),
+                    code=code,
+                )
+                await asyncio.sleep(delay)
             except (httpx.HTTPError, ValueError) as exc:
                 last_error = exc
                 logger.warning(
@@ -263,6 +278,17 @@ class AlphaShopClient:
                 )
                 if attempt >= max(self.max_retries, 1):
                     raise
+                # Exponential backoff for transport errors
+                base_delay = settings.alphashop_retry_base_delay_seconds
+                delay = base_delay * (2 ** (attempt - 1)) + random.uniform(0, 0.5)
+                logger.debug(
+                    "alphashop_retry_backoff",
+                    endpoint=endpoint,
+                    attempt=attempt,
+                    delay_seconds=round(delay, 3),
+                    error_type=type(exc).__name__,
+                )
+                await asyncio.sleep(delay)
 
         raise RuntimeError(f"AlphaShop request failed for {endpoint}: {last_error}")
 

@@ -77,6 +77,14 @@ class Settings(BaseSettings):
         default=True,
         validation_alias=AliasChoices("ALPHASHOP_ENABLED"),
     )
+    alphashop_retry_base_delay_seconds: float = Field(
+        default=1.0,
+        validation_alias=AliasChoices("ALPHASHOP_RETRY_BASE_DELAY_SECONDS"),
+    )
+    alphashop_keyword_search_min_interval_ms: int = Field(
+        default=300,
+        validation_alias=AliasChoices("ALPHASHOP_KEYWORD_SEARCH_MIN_INTERVAL_MS"),
+    )
 
     # TMAPI 1688 API (deprecated, replaced by AlphaShop)
     tmapi_api_token: str = Field(

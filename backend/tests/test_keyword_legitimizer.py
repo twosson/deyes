@@ -1,6 +1,6 @@
 """Tests for keyword legitimizer service."""
 import pytest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from app.services.keyword_legitimizer import KeywordLegitimizerService, ValidKeyword
 from app.services.seed_pool_builder import Seed
@@ -209,6 +209,39 @@ class TestKeywordLegitimizerService:
         )
 
         assert len(results) == 0
+
+    @pytest.mark.asyncio
+    async def test_legitimize_seeds_applies_request_spacing(self):
+        """Test legitimization waits between sequential AlphaShop keyword requests."""
+        mock_client = AsyncMock()
+        mock_client.search_keywords.return_value = {
+            "keyword_list": [
+                {
+                    "keyword": "phone case",
+                    "oppScore": 70,
+                    "searchVolume": 4000,
+                }
+            ]
+        }
+
+        service = KeywordLegitimizerService(alphashop_client=mock_client)
+        service.settings.alphashop_keyword_search_min_interval_ms = 250
+
+        seeds = [
+            Seed(term="phone case", source="user", confidence=1.0),
+            Seed(term="tablet case", source="user", confidence=1.0),
+        ]
+
+        with patch("app.services.keyword_legitimizer.asyncio.sleep", new=AsyncMock()) as mock_sleep:
+            results = await service.legitimize_seeds(
+                seeds=seeds,
+                region="US",
+                platform="amazon",
+                min_opp_score=20.0,
+            )
+
+        assert len(results) == 2
+        mock_sleep.assert_awaited_once_with(0.25)
 
     @pytest.mark.asyncio
     async def test_legitimize_seeds_without_client(self):

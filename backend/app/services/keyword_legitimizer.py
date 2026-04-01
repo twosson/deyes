@@ -4,6 +4,7 @@ Converts seeds into valid keywords using AlphaShop keyword.search API.
 """
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -93,8 +94,11 @@ class KeywordLegitimizerService:
         valid_keywords: list[ValidKeyword] = []
         api_call_count = 0
         api_error_count = 0
+        min_interval_ms = max(self.settings.alphashop_keyword_search_min_interval_ms, 0)
 
-        for seed in seeds:
+        for index, seed in enumerate(seeds):
+            if index > 0 and min_interval_ms > 0:
+                await asyncio.sleep(min_interval_ms / 1000)
             api_call_count += 1
             try:
                 response = await client.search_keywords(

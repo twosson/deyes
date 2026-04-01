@@ -152,7 +152,11 @@ class KeywordGenerator:
         limit: int = 20,
         expand_top_n: int = 5,
     ) -> list[KeywordResult]:
-        """Generate keywords for real-time product selection."""
+        """Generate keywords for real-time product selection.
+
+        Opportunity-first refactor: No longer uses default category fallback.
+        If category is None, returns empty list to avoid masking missing context.
+        """
         self.logger.info(
             "selection_keyword_generation_started",
             category=category,
@@ -160,12 +164,16 @@ class KeywordGenerator:
             limit=limit,
         )
 
-        # When category is None, use a generic seed that AlphaShop can expand
-        # rather than hardcoding "electronics"
-        effective_category = category if category else "home goods"
+        if not category:
+            self.logger.warning(
+                "selection_keyword_generation_no_category",
+                region=region,
+                reason="category_required_for_explicit_generation",
+            )
+            return []
 
         base_keywords = await self.generate_trending_keywords(
-            category=effective_category,
+            category=category,
             region=region,
             limit=limit,
         )

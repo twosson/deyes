@@ -107,34 +107,15 @@ class OpportunityDiscoveryService:
                     )
                     continue
 
-                # Try with listing_time first
-                try:
-                    response = await client.newproduct_report(
-                        platform=platform,
-                        region=region,
-                        product_keyword=report_keyword,
-                        listing_time=self.settings.keyword_generation_listing_time,
-                        size=report_size,
-                    )
-                except RuntimeError as exc:
-                    # If AlphaShop rejects with FAIL_REQUEST_PARAMETER_ILLEGAL, retry with minimal payload
-                    error_code = getattr(exc, "alphashop_code", None)
-                    if error_code == "FAIL_REQUEST_PARAMETER_ILLEGAL":
-                        self.logger.info(
-                            "opportunity_report_retry_minimal_payload",
-                            keyword=valid_kw.matched_keyword,
-                            report_keyword=report_keyword,
-                            original_error=str(exc),
-                        )
-                        response = await client.newproduct_report(
-                            platform=platform,
-                            region=region,
-                            product_keyword=report_keyword,
-                            listing_time=None,
-                            size=None,
-                        )
-                    else:
-                        raise
+                # AlphaShop contract: newproduct.report requires strict productKeyword from keyword.search.
+                # Fail immediately on parameter rejection instead of masking with retry.
+                response = await client.newproduct_report(
+                    platform=platform,
+                    region=region,
+                    product_keyword=report_keyword,
+                    listing_time=self.settings.keyword_generation_listing_time,
+                    size=report_size,
+                )
 
                 product_list = response.get("product_list") or []
                 keyword_summary = response.get("keyword_summary") or {}

@@ -689,17 +689,15 @@ async def test_explicit_keyword_mode_uses_keyword_search():
 
 
 @pytest.mark.asyncio
-async def test_cold_start_mode_uses_config_seeds():
-    """Cold start should use configured seeds in legacy mode."""
+async def test_returns_empty_without_keywords():
+    """Adapter should return empty results when no validated keywords are provided."""
     client = FakeTMAPIClient()
     adapter = Alibaba1688Adapter(tmapi_client=client)
-    adapter.settings.product_selection_adapter_legacy_seed_mode = True
 
     products = await adapter.fetch_products(limit=4)
 
-    assert client.search_items.called
-    assert len(products) > 0
-    assert any(product.normalized_attributes["seed_type"] in {"cold_start", "llm"} for product in products)
+    assert products == []
+    assert not client.search_items.called
 
 
 @pytest.mark.asyncio
@@ -707,7 +705,6 @@ async def test_demand_first_mode_returns_empty_without_keywords():
     """Demand-first mode should return empty results when no keywords provided."""
     client = FakeTMAPIClient()
     adapter = Alibaba1688Adapter(tmapi_client=client)
-    adapter.settings.product_selection_adapter_legacy_seed_mode = False
 
     products = await adapter.fetch_products(limit=4)
 
@@ -716,8 +713,8 @@ async def test_demand_first_mode_returns_empty_without_keywords():
 
 
 @pytest.mark.asyncio
-async def test_historical_seed_recall_injects_high_performing_seeds():
-    """Historical seeds should be injected into category/cold-start recall when feedback is available."""
+async def test_returns_empty_without_category_fallback_or_historical_seed_injection():
+    """Adapter should not inject category or historical seeds when keywords are missing."""
     client = FakeTMAPIClient(catalog={"历史爆款": [{
         "item_id": "history-001",
         "title": "历史爆款商品",
@@ -733,15 +730,13 @@ async def test_historical_seed_recall_injects_high_performing_seeds():
         "member_id": "member-history-001",
     }]})
     adapter = Alibaba1688Adapter(tmapi_client=client, feedback_aggregator=FakeFeedbackAggregator())
-    adapter.settings.product_selection_adapter_legacy_seed_mode = True
     adapter.settings.tmapi_1688_enable_historical_feedback = True
     adapter.settings.tmapi_1688_suggest_limit_per_seed = 3
 
     products = await adapter.fetch_products(category="测试类目", limit=3)
 
-    searched_keywords = [call.kwargs["keyword"] for call in client.search_items.call_args_list]
-    assert "历史爆款" in searched_keywords
-    assert any(product.normalized_attributes["seed_type"] == "historical" for product in products)
+    assert products == []
+    assert not client.search_items.called
 
 
 @pytest.mark.asyncio
@@ -1248,154 +1243,6 @@ async def test_titles_are_similar_detects_variants():
 
 
 @pytest.mark.asyncio
-async def test_category_mode_adds_category_hotword_seeds_without_llm_by_default():
-    """Category mode should add hotword seeds and keep category as the dominant lane."""
-    client = FakeTMAPIClient(
-        catalog={
-            "手机配件": [
-                {
-                    "item_id": "cat-1",
-                    "title": "类目主商品",
-                    "price": "8.00",
-                    "sale_count": 1500,
-                    "img": "https://example.com/cat-1.jpg",
-                    "product_url": "https://detail.1688.com/offer/cat-1.html",
-                    "category_name": "手机配件",
-                    "company_name": "类目工厂",
-                    "shop_name": "类目店",
-                    "moq": 10,
-                    "shop_url": "https://shop.example.com/cat-1",
-                    "member_id": "member-cat-1",
-                    "is_factory": True,
-                    "is_super_factory": True,
-                    "verified_supplier": True,
-                    "support_dropshipping": True,
-                }
-            ],
-            "磁吸手机壳": [
-                {
-                    "item_id": "hot-1",
-                    "title": "磁吸壳热词商品",
-                    "price": "9.00",
-                    "sale_count": 2600,
-                    "img": "https://example.com/hot-1.jpg",
-                    "product_url": "https://detail.1688.com/offer/hot-1.html",
-                    "category_name": "手机配件",
-                    "company_name": "热词工厂",
-                    "shop_name": "热词店",
-                    "moq": 8,
-                    "shop_url": "https://shop.example.com/hot-1",
-                    "member_id": "member-hot-1",
-                }
-            ],
-        },
-        image_products=[],
-    )
-    adapter = Alibaba1688Adapter(tmapi_client=client)
-    adapter.settings.product_selection_adapter_legacy_seed_mode = True
-    adapter.settings.tmapi_1688_suggest_limit_per_seed = 1
-
-    products = await adapter.fetch_products(category="手机配件", limit=2)
-
-    searched_keywords = {call.kwargs["keyword"] for call in client.search_items.call_args_list}
-    assert "手机配件" in searched_keywords
-    assert "磁吸手机壳" in searched_keywords
-    assert any(product.normalized_attributes["seed_type"] == "category" for product in products)
-    assert any(product.normalized_attributes["seed_type"] == "category_hotword" for product in products)
-
-
-@pytest.mark.asyncio
-async def test_cold_start_prefers_seasonal_then_falls_back_to_cold_start():
-    """Cold start should inject seasonal seeds before generic fallback seeds."""
-    client = FakeTMAPIClient(
-        catalog={
-            "夏季新品": [
-                {
-                    "item_id": "season-1",
-                    "title": "夏季候选",
-                    "price": "11.00",
-                    "sale_count": 900,
-                    "img": "https://example.com/season-1.jpg",
-                    "product_url": "https://detail.1688.com/offer/season-1.html",
-                    "category_name": "季节类目",
-                    "company_name": "季节工厂",
-                    "shop_name": "季节店",
-                    "moq": 12,
-                    "shop_url": "https://shop.example.com/season-1",
-                    "member_id": "member-season-1",
-                }
-            ],
-            "热销": [
-                {
-                    "item_id": "cold-1",
-                    "title": "泛化冷启动候选",
-                    "price": "7.00",
-                    "sale_count": 600,
-                    "img": "https://example.com/cold-1.jpg",
-                    "product_url": "https://detail.1688.com/offer/cold-1.html",
-                    "category_name": "通用品",
-                    "company_name": "冷启动工厂",
-                    "shop_name": "冷启动店",
-                    "moq": 24,
-                    "shop_url": "https://shop.example.com/cold-1",
-                    "member_id": "member-cold-1",
-                }
-            ],
-        },
-        image_products=[],
-    )
-    adapter = Alibaba1688Adapter(tmapi_client=client)
-    adapter.settings.product_selection_adapter_legacy_seed_mode = True
-    adapter.settings.tmapi_1688_seasonal_seed_limit = 1
-    adapter.settings.tmapi_1688_min_seed_count = 2
-    adapter._get_current_season = lambda: "summer"
-
-    products = await adapter.fetch_products(limit=2)
-
-    searched_keywords = {call.kwargs["keyword"] for call in client.search_items.call_args_list}
-    assert "夏季新品" in searched_keywords
-    assert "热销" in searched_keywords
-    assert any(product.normalized_attributes["seed_type"] == "seasonal" for product in products)
-    assert any(product.normalized_attributes["seed_type"] == "cold_start" for product in products)
-
-
-@pytest.mark.asyncio
-async def test_cold_start_without_seasonal_hits_still_falls_back_to_cold_start_results():
-    """Cold start should still work when seasonal seeds do not return any recall."""
-    client = FakeTMAPIClient(
-        catalog={
-            "热销": [
-                {
-                    "item_id": "fallback-cold-1",
-                    "title": "冷启动回退商品",
-                    "price": "7.00",
-                    "sale_count": 700,
-                    "img": "https://example.com/fallback-cold-1.jpg",
-                    "product_url": "https://detail.1688.com/offer/fallback-cold-1.html",
-                    "category_name": "回退类目",
-                    "company_name": "回退工厂",
-                    "shop_name": "回退店",
-                    "moq": 16,
-                    "shop_url": "https://shop.example.com/fallback-cold-1",
-                    "member_id": "member-fallback-cold-1",
-                }
-            ]
-        },
-        image_products=[],
-    )
-    adapter = Alibaba1688Adapter(tmapi_client=client)
-    adapter.settings.product_selection_adapter_legacy_seed_mode = True
-    adapter.settings.tmapi_1688_seasonal_seed_limit = 1
-    adapter.settings.tmapi_1688_min_seed_count = 2
-    adapter._get_current_season = lambda: "summer"
-
-    products = await adapter.fetch_products(limit=1)
-
-    assert len(products) == 1
-    assert products[0].normalized_attributes["seed_type"] == "cold_start"
-
-
-@pytest.mark.asyncio
 async def test_llm_expansion_runs_only_when_first_pass_recall_is_low():
     """LLM expansion should trigger only for underperforming first-pass recall."""
     low_recall_client = FakeTMAPIClient(
@@ -1437,14 +1284,13 @@ async def test_llm_expansion_runs_only_when_first_pass_recall_is_low():
     )
     low_recall_llm = FakeSGLangClient(queries=["磁吸手机壳"])
     low_recall_adapter = Alibaba1688Adapter(tmapi_client=low_recall_client, sglang_client=low_recall_llm)
-    low_recall_adapter.settings.product_selection_adapter_legacy_seed_mode = True
     low_recall_adapter.settings.tmapi_1688_enable_llm_query_expansion = True
     low_recall_adapter.settings.tmapi_1688_suggest_limit_per_seed = 0
     low_recall_adapter.settings.tmapi_1688_llm_query_limit = 2
     low_recall_adapter.settings.tmapi_1688_llm_expansion_min_recall_threshold = 3
     low_recall_adapter.settings.tmapi_1688_llm_expansion_min_quality_threshold = 999.0
 
-    low_products = await low_recall_adapter.fetch_products(category="手机配件", limit=2)
+    low_products = await low_recall_adapter.fetch_products(keywords=["手机配件"], limit=2)
 
     low_keywords = [call.kwargs["keyword"] for call in low_recall_client.search_items.call_args_list]
     assert low_recall_llm.generate_structured_json.called
@@ -1514,14 +1360,13 @@ async def test_llm_expansion_runs_only_when_first_pass_recall_is_low():
     )
     high_recall_llm = FakeSGLangClient(queries=["磁吸手机壳"])
     high_recall_adapter = Alibaba1688Adapter(tmapi_client=high_recall_client, sglang_client=high_recall_llm)
-    high_recall_adapter.settings.product_selection_adapter_legacy_seed_mode = True
     high_recall_adapter.settings.tmapi_1688_enable_llm_query_expansion = True
     high_recall_adapter.settings.tmapi_1688_suggest_limit_per_seed = 0
     high_recall_adapter.settings.tmapi_1688_llm_query_limit = 2
     high_recall_adapter.settings.tmapi_1688_llm_expansion_min_recall_threshold = 3
     high_recall_adapter.settings.tmapi_1688_llm_expansion_min_quality_threshold = 20.0
 
-    high_products = await high_recall_adapter.fetch_products(category="手机配件", limit=2)
+    high_products = await high_recall_adapter.fetch_products(keywords=["手机配件"], limit=2)
 
     high_keywords = [call.kwargs["keyword"] for call in high_recall_client.search_items.call_args_list]
     assert not high_recall_llm.generate_structured_json.called
@@ -1613,8 +1458,8 @@ async def test_diversification_seed_targets_include_new_lane_priority():
 
 
 @pytest.mark.asyncio
-async def test_new_seed_types_have_stable_normalized_attributes_output():
-    """New seed types should be preserved in normalized output."""
+async def test_explicit_keywords_have_stable_normalized_attributes_output():
+    """Explicit keyword seed types should be preserved in normalized output."""
     client = FakeTMAPIClient(
         catalog={
             "磁吸手机壳": [
@@ -1637,13 +1482,11 @@ async def test_new_seed_types_have_stable_normalized_attributes_output():
         image_products=[],
     )
     adapter = Alibaba1688Adapter(tmapi_client=client)
-    adapter.settings.product_selection_adapter_legacy_seed_mode = True
-    adapter.settings.tmapi_1688_suggest_limit_per_seed = 1
 
-    products = await adapter.fetch_products(category="手机配件", limit=1)
+    products = await adapter.fetch_products(keywords=["磁吸手机壳"], limit=1)
 
     assert len(products) == 1
-    assert products[0].normalized_attributes["seed_type"] in {"category", "category_hotword"}
+    assert products[0].normalized_attributes["seed_type"] == "explicit"
 
 
 @pytest.mark.asyncio

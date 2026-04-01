@@ -300,6 +300,12 @@ def test_trigger_keyword_based_selection_returns_result(monkeypatch):
     assert result["output_data"]["count"] == 2
 
 
+def test_trigger_keyword_based_selection_uses_alibaba_1688_platform():
+    """Nightly keyword-triggered selection should target alibaba_1688."""
+    assert tasks_keyword_research.NIGHTLY_SELECTION_PLATFORM == "alibaba_1688"
+
+
+
 def test_trigger_keyword_based_selection_raises_on_exception(monkeypatch):
     """Selection task should propagate exceptions."""
     mock_asyncio_run = MagicMock(side_effect=RuntimeError("selection boom"))

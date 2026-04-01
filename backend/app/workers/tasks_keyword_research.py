@@ -15,6 +15,7 @@ logger = get_logger(__name__)
 
 # System-level placeholder for strategy_run_id
 SYSTEM_STRATEGY_RUN_ID = UUID("00000000-0000-0000-0000-000000000000")
+NIGHTLY_SELECTION_PLATFORM = "alibaba_1688"
 
 
 def _get_redis_client():
@@ -287,6 +288,9 @@ def trigger_keyword_based_selection(
     This task is called after keyword generation to automatically start
     product discovery for trending keywords.
 
+    Opportunity-first refactor: Uses alibaba_1688 platform to leverage
+    AlphaShop newproduct.report opportunity discovery.
+
     Args:
         category: Product category
         keywords: List of keywords to search for
@@ -318,7 +322,7 @@ def trigger_keyword_based_selection(
                 strategy_run_id=SYSTEM_STRATEGY_RUN_ID,
                 db=db,
                 input_data={
-                    "platform": "temu",  # Default platform
+                    "platform": NIGHTLY_SELECTION_PLATFORM,
                     "category": category,
                     "keywords": keywords,
                     "region": region,

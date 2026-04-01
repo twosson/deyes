@@ -298,11 +298,9 @@ class Alibaba1688Adapter(SourceAdapter):
     ) -> tuple[list[SearchSeed], str]:
         """Build search seeds from pre-validated keywords only.
 
-        Demand-first contract:
-        - When legacy mode is disabled, all search seeds must come from upstream
-          demand discovery / validation.
-        - When legacy mode is enabled, fall back to the historical seed generation
-          path for temporary compatibility.
+        Opportunity-first contract:
+        - All search seeds must come from upstream demand discovery / validation.
+        - No fallback to category/cold-start seeds when keywords are empty.
         """
         seeds: list[SearchSeed] = []
         seen_keywords: set[str] = set()
@@ -322,20 +320,11 @@ class Alibaba1688Adapter(SourceAdapter):
         if seeds:
             return seeds, "validated"
 
-        if not self.settings.product_selection_adapter_legacy_seed_mode:
-            self.logger.warning(
-                "alibaba_1688_no_validated_keywords",
-                category=category,
-                legacy_mode=False,
-            )
-            return [], "validated"
-
         self.logger.warning(
-            "alibaba_1688_legacy_seed_mode_enabled",
+            "alibaba_1688_no_validated_keywords",
             category=category,
-            reason="empty_keywords",
         )
-        return self._build_legacy_search_seeds(category=category)
+        return [], "validated"
 
     def _build_legacy_search_seeds(
         self,

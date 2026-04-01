@@ -255,6 +255,52 @@ class TestAlphaShop1688Adapter:
         assert len(result) == 1
         assert result[0].source_product_id == "recovered-item"
 
+    def test_normalize_report_products_maps_report_items(self):
+        """Test normalize_report_products converts newproduct.report items into ProductData."""
+        adapter = AlphaShop1688Adapter()
+
+        opportunities = [
+            {
+                "keyword": "tablet stand",
+                "title": "Rising tablet stand demand",
+                "opportunity_score": 88.0,
+                "keyword_summary": {"summary": "Rising tablet stand demand", "opportunityScore": 88},
+                "evidence": {"report_keyword": "tablet stand", "product_count": 1},
+                "product_list": [
+                    {
+                        "productId": "report-123",
+                        "title": "Adjustable Tablet Stand",
+                        "itemPrice": {"price": "50.0"},
+                        "imageUrl": "https://example.com/tablet-stand.jpg",
+                        "detailUrl": "https://detail.1688.com/offer/report-123.html",
+                        "salesCount": 3200,
+                        "category": "electronics",
+                        "purchaseInfos": [{"moq": 24}],
+                        "providerInfo": {
+                            "companyName": "Tablet Factory",
+                            "shopUrl": "https://shop.1688.com/tablet-factory",
+                        },
+                    }
+                ],
+            }
+        ]
+
+        result = adapter.normalize_report_products(opportunities=opportunities, limit=10)
+
+        assert len(result) == 1
+        assert result[0].source_platform == SourcePlatform.ALIBABA_1688
+        assert result[0].source_product_id == "report-123"
+        assert result[0].title == "Adjustable Tablet Stand"
+        assert result[0].platform_price == Decimal("7.0")
+        assert result[0].sales_count == 3200
+        assert result[0].main_image_url == "https://example.com/tablet-stand.jpg"
+        assert result[0].normalized_attributes["matched_keyword"] == "tablet stand"
+        assert result[0].normalized_attributes["report_keyword"] == "tablet stand"
+        assert result[0].normalized_attributes["opportunity_provenance"]["opportunity_score"] == 88.0
+        assert result[0].normalized_attributes["moq"] == 24
+        assert len(result[0].supplier_candidates) == 1
+        assert result[0].supplier_candidates[0]["supplier_name"] == "Tablet Factory"
+
     def test_offer_to_product_data_handles_missing_title(self):
         """Test _offer_to_product_data returns None for offers without title."""
         adapter = AlphaShop1688Adapter()

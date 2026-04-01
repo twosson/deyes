@@ -199,7 +199,11 @@ class KeywordLegitimizerService:
         return valid_keywords
 
     def _select_best_match(self, seed: str, keyword_list: list[dict]) -> Optional[dict]:
-        """Select best keyword match for seed."""
+        """Select best keyword match for seed.
+
+        Returns None if no valid match is found. Does NOT fallback to first result
+        to avoid masking legitimization failures.
+        """
         seed_lower = seed.lower().strip()
 
         # Try exact match first
@@ -223,8 +227,8 @@ class KeywordLegitimizerService:
                 if seed_lower in keyword_lower or keyword_lower in seed_lower:
                     return item
 
-        # Fallback to first result
-        return keyword_list[0] if keyword_list else None
+        # No valid match found - return None instead of fallback
+        return None
 
     def _normalize_keyword(self, keyword: str) -> str:
         """Normalize keyword for matching (remove plural, etc.)."""

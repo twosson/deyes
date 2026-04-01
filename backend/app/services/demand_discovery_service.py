@@ -199,35 +199,62 @@ class DemandDiscoveryService:
             accumulated_rejections.extend(user_result.rejected_keywords)
             prior_results.append(user_result)
 
-        # 2. Runtime generation / seed expansion.
-        if self.settings.product_selection_enable_runtime_keyword_generation:
-            generated_result = await self._discover_from_generated_keywords(
+        if not self.settings.product_selection_enable_runtime_keyword_generation:
+            self.logger.warning(
+                "demand_discovery_no_valid_keywords",
                 category=category,
                 region=normalized_region,
                 platform=platform,
-                max_keywords=max_keywords,
+                rejected=len(accumulated_rejections),
             )
-            if generated_result.validated_keywords:
-                merged_result = self._merge_results(
-                    discovery_mode=generated_result.discovery_mode,
-                    fallback_used=False,
-                    degraded=bool(normalized_keywords) or generated_result.degraded,
-                    results=prior_results + [generated_result],
-                    rejected_keywords=accumulated_rejections + generated_result.rejected_keywords,
-                )
-                self._log_metrics(
-                    category=category,
-                    region=normalized_region,
-                    platform=platform,
-                    result=merged_result,
-                    success=True,
-                    skip=False,
-                    generated_recovery=bool(normalized_keywords),
-                )
-                return merged_result
 
-            accumulated_rejections.extend(generated_result.rejected_keywords)
-            prior_results.append(generated_result)
+            final_result = self._merge_results(
+                discovery_mode="none",
+                fallback_used=False,
+                degraded=True,
+                results=prior_results,
+                rejected_keywords=accumulated_rejections,
+                degraded_reason=self._first_degraded_reason(prior_results) or "no_valid_keywords",
+            )
+            self._log_metrics(
+                category=category,
+                region=normalized_region,
+                platform=platform,
+                result=final_result,
+                success=False,
+                skip=True,
+                generated_recovery=False,
+            )
+            return final_result
+
+        # 2. Runtime generation as explicit seed expansion path.
+        generated_result = await self._discover_from_generated_keywords(
+            category=category,
+            region=normalized_region,
+            platform=platform,
+            max_keywords=max_keywords,
+        )
+        if generated_result.validated_keywords:
+            merged_result = self._merge_results(
+                discovery_mode=generated_result.discovery_mode,
+                fallback_used=False,
+                degraded=generated_result.degraded,
+                results=prior_results + [generated_result],
+                rejected_keywords=accumulated_rejections + generated_result.rejected_keywords,
+            )
+            self._log_metrics(
+                category=category,
+                region=normalized_region,
+                platform=platform,
+                result=merged_result,
+                success=True,
+                skip=False,
+                generated_recovery=False,
+            )
+            return merged_result
+
+        accumulated_rejections.extend(generated_result.rejected_keywords)
+        prior_results.append(generated_result)
 
         # 3. Nothing validated.
         self.logger.warning(
@@ -398,25 +425,17 @@ class DemandDiscoveryService:
                 degraded_reason=degraded_reason,
             )
 
-        # Compatibility fallback: if legitimization is unavailable, validate seeds directly.
-        direct_result = await self._validate_keywords(
-            keywords=[seed.term for seed in seeds],
-            source=discovery_mode,
-            category=category,
-            region=region,
-            platform=platform,
-            max_keywords=max_keywords,
+        return DemandDiscoveryResult(
+            validated_keywords=[],
+            rejected_keywords=[],
             discovery_mode=discovery_mode,
-            source_map={seed.term: seed.source for seed in seeds},
             fallback_used=fallback_used,
             degraded=True,
-            metadata_map={},
+            seeds=serialized_seeds,
+            valid_keywords=valid_keyword_payload,
+            seed_to_keyword_mapping=mapping_payload,
+            degraded_reason=degraded_reason or "no_report_safe_keywords",
         )
-        direct_result.seeds = serialized_seeds
-        direct_result.valid_keywords = valid_keyword_payload
-        direct_result.seed_to_keyword_mapping = mapping_payload
-        direct_result.degraded_reason = degraded_reason or "no_report_safe_keywords"
-        return direct_result
 
     async def _validate_legitimized_keywords(
         self,

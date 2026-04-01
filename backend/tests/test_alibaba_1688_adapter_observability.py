@@ -19,11 +19,10 @@ class FakeTMAPIClient:
 
 
 @pytest.mark.asyncio
-async def test_adapter_warns_when_empty_keywords_in_demand_first_mode():
-    """Adapter should log warning when receiving empty keywords in demand-first mode."""
+async def test_adapter_returns_empty_when_keywords_missing():
+    """Adapter should return empty results when no validated keywords are provided."""
     client = FakeTMAPIClient()
     adapter = Alibaba1688Adapter(tmapi_client=client)
-    adapter.settings.product_selection_adapter_legacy_seed_mode = False
 
     products = await adapter.fetch_products(keywords=[], limit=5)
 
@@ -32,11 +31,10 @@ async def test_adapter_warns_when_empty_keywords_in_demand_first_mode():
 
 
 @pytest.mark.asyncio
-async def test_adapter_warns_when_whitespace_only_keywords():
-    """Adapter should filter out whitespace-only keywords and warn if none remain."""
+async def test_adapter_filters_whitespace_keywords():
+    """Adapter should filter out whitespace-only keywords and return empty if none remain."""
     client = FakeTMAPIClient()
     adapter = Alibaba1688Adapter(tmapi_client=client)
-    adapter.settings.product_selection_adapter_legacy_seed_mode = False
 
     products = await adapter.fetch_products(keywords=["  ", "\t", "\n"], limit=5)
 
@@ -57,13 +55,12 @@ async def test_adapter_logs_discovery_mode_in_fetch_completed():
 
 
 @pytest.mark.asyncio
-async def test_adapter_legacy_mode_fallback_logs_reason():
-    """Adapter should log reason when falling back to legacy seed mode."""
+async def test_adapter_returns_empty_without_legacy_fallback():
+    """Adapter should not fall back to category seeds when keywords are missing."""
     client = FakeTMAPIClient()
     adapter = Alibaba1688Adapter(tmapi_client=client)
-    adapter.settings.product_selection_adapter_legacy_seed_mode = True
 
-    await adapter.fetch_products(keywords=[], category="electronics", limit=5)
+    products = await adapter.fetch_products(keywords=[], category="electronics", limit=5)
 
-    # Verify that legacy_seed_mode_enabled log includes reason="empty_keywords"
-    # (actual log assertion would require log capture fixture)
+    assert products == []
+    assert not client.search_items.called

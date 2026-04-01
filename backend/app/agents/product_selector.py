@@ -1,6 +1,15 @@
-"""Product Selector Agent."""
+"""Product Selector Agent.
+
+Opportunity-first refactor (Phase 1):
+- For AlphaShop / 1688 platform: newproduct.report.product_list becomes the
+  direct candidate source. The source adapter is used only for downstream
+  enrichment (supplier, pricing, risk), not for a second keyword search.
+- For other platforms: source adapter fetch_products is used as before.
+- All candidates retain full opportunity provenance in
+  demand_discovery_metadata and normalized_attributes.
+"""
 from decimal import Decimal
-from typing import Optional
+from typing import Any, Optional
 from uuid import uuid4
 
 from app.agents.base.agent import AgentContext, AgentResult, BaseAgent
@@ -10,9 +19,9 @@ from app.core.seasonal_calendar import get_seasonal_calendar
 from app.db.models import CandidateProduct, SupplierMatch
 from app.services.demand_discovery_service import DemandDiscoveryService
 from app.services.demand_validator import DemandValidator
-from app.services.opportunity_discovery_service import OpportunityDiscoveryService
+from app.services.opportunity_discovery_service import OpportunityDiscoveryService, OpportunityDraft
 from app.services.product_scoring_service import ProductScoreInput, ProductScoringService
-from app.services.source_adapter import MockSourceAdapter, SourceAdapter
+from app.services.source_adapter import MockSourceAdapter, ProductData, SourceAdapter
 from app.services.supplier_matcher import SupplierMatcherService
 
 
@@ -217,6 +226,8 @@ class ProductSelectorAgent(BaseAgent):
                         self.source_adapter = TemuSourceAdapterV2()
                         created_adapter = True
                     elif platform == SourcePlatform.ALIBABA_1688:
+                        # For AlphaShop opportunity-first path, adapter is only used for enrichment
+                        # Primary candidate source is opportunity.product_list
                         from app.services.alphashop_1688_adapter import AlphaShop1688Adapter
 
                         self.source_adapter = AlphaShop1688Adapter()
@@ -226,23 +237,52 @@ class ProductSelectorAgent(BaseAgent):
                 else:
                     self.source_adapter = MockSourceAdapter(platform)
 
-            # Fetch products from source platform using validated keywords only
-            products = await self.source_adapter.fetch_products(
-                category=category,
-                keywords=validated_keywords,
-                price_min=Decimal(str(price_min)) if price_min else None,
-                price_max=Decimal(str(price_max)) if price_max else None,
-                limit=max_candidates,
-                region=region,
-            )
+            # Fetch products from source platform
+            # For AlphaShop path with opportunities, use opportunity products directly
+            # For other platforms or when no opportunities, use adapter fetch
+            if opportunities and platform == SourcePlatform.ALIBABA_1688:
+                # Use adapter normalization if available (preferred for 1688 field handling)
+                if isinstance(self.source_adapter, SourceAdapter) and hasattr(
+                    self.source_adapter, "normalize_report_products"
+                ):
+                    products = self.source_adapter.normalize_report_products(
+                        opportunities=[opp.to_dict() for opp in opportunities],
+                        price_min=Decimal(str(price_min)) if price_min else None,
+                        price_max=Decimal(str(price_max)) if price_max else None,
+                        limit=max_candidates,
+                    )
+                else:
+                    # Fallback to local normalization for non-AlphaShop adapters
+                    products = self._normalize_opportunity_products(
+                        opportunities=opportunities,
+                        price_min=Decimal(str(price_min)) if price_min else None,
+                        price_max=Decimal(str(price_max)) if price_max else None,
+                        limit=max_candidates,
+                    )
+                self.logger.info(
+                    "products_from_opportunities",
+                    count=len(products),
+                    platform=platform.value,
+                    opportunities_count=len(opportunities),
+                    strategy_run_id=str(context.strategy_run_id),
+                )
+            else:
+                products = await self.source_adapter.fetch_products(
+                    category=category,
+                    keywords=validated_keywords,
+                    price_min=Decimal(str(price_min)) if price_min else None,
+                    price_max=Decimal(str(price_max)) if price_max else None,
+                    limit=max_candidates,
+                    region=region,
+                )
 
-            self.logger.info(
-                "products_fetched",
-                count=len(products),
-                platform=platform.value,
-                validated_keywords=validated_keywords,
-                strategy_run_id=str(context.strategy_run_id),
-            )
+                self.logger.info(
+                    "products_fetched",
+                    count=len(products),
+                    platform=platform.value,
+                    validated_keywords=validated_keywords,
+                    strategy_run_id=str(context.strategy_run_id),
+                )
 
             # Seasonal boost factor
             seasonal_boost = 1.0
@@ -275,9 +315,6 @@ class ProductSelectorAgent(BaseAgent):
                 )
 
             candidate_ids = []
-            opportunity_map = {
-                opp.keyword.lower(): opp.to_dict() for opp in opportunities if opp.keyword
-            }
 
             # Process each product
             for rank, (product, priority_score) in enumerate(products_with_scores, start=1):
@@ -288,19 +325,14 @@ class ProductSelectorAgent(BaseAgent):
                             competition_density = result.competition_density.value
                             break
 
-                normalized_attributes = product.normalized_attributes or {}
+                normalized_attributes = dict(product.normalized_attributes or {})
                 normalized_attributes["competition_density"] = competition_density
 
-                matched_opportunity = None
-                for keyword, opportunity in opportunity_map.items():
-                    if keyword and keyword in product.title.lower():
-                        matched_opportunity = opportunity
-                        break
-
-                if matched_opportunity:
-                    normalized_attributes["opportunity_keyword"] = matched_opportunity["keyword"]
-                    normalized_attributes["opportunity_score"] = matched_opportunity.get("opportunity_score")
-                    normalized_attributes["opportunity_title"] = matched_opportunity.get("title")
+                opportunity_provenance = normalized_attributes.get("opportunity_provenance")
+                if opportunity_provenance:
+                    normalized_attributes["opportunity_keyword"] = opportunity_provenance.get("keyword")
+                    normalized_attributes["opportunity_score"] = opportunity_provenance.get("opportunity_score")
+                    normalized_attributes["opportunity_title"] = opportunity_provenance.get("title")
 
                 if self.enable_seasonal_boost:
                     normalized_attributes["seasonal_boost"] = seasonal_boost
@@ -311,8 +343,8 @@ class ProductSelectorAgent(BaseAgent):
                 demand_metadata = None
                 if demand_discovery_payload:
                     demand_metadata = {**demand_discovery_payload}
-                    if matched_opportunity:
-                        demand_metadata["opportunity"] = matched_opportunity
+                    if opportunity_provenance:
+                        demand_metadata["opportunity"] = opportunity_provenance
                     if opportunities:
                         demand_metadata["opportunities"] = [opp.to_dict() for opp in opportunities]
                     if skipped_reason:
@@ -407,6 +439,192 @@ class ProductSelectorAgent(BaseAgent):
             if created_adapter and hasattr(self.source_adapter, "close"):
                 await self.source_adapter.close()
                 self.source_adapter = None
+
+    def _normalize_opportunity_products(
+        self,
+        opportunities: list[OpportunityDraft],
+        price_min: Optional[Decimal] = None,
+        price_max: Optional[Decimal] = None,
+        limit: int = 10,
+    ) -> list[ProductData]:
+        """Convert AlphaShop opportunity report items into ProductData candidates.
+
+        Applies price filtering and limit to match source adapter behavior.
+        """
+        products: list[ProductData] = []
+        seen_product_ids: set[str] = set()
+
+        for opportunity in opportunities:
+            if len(products) >= limit:
+                break
+
+            opportunity_dict = opportunity.to_dict()
+            for item in opportunity.product_list:
+                if len(products) >= limit:
+                    break
+
+                product = self._normalize_opportunity_product(
+                    item=item,
+                    opportunity=opportunity_dict,
+                )
+                if not product:
+                    continue
+                if product.source_product_id in seen_product_ids:
+                    continue
+
+                # Apply price filtering
+                if price_min is not None and product.platform_price is not None:
+                    if product.platform_price < price_min:
+                        continue
+                if price_max is not None and product.platform_price is not None:
+                    if product.platform_price > price_max:
+                        continue
+
+                seen_product_ids.add(product.source_product_id)
+                products.append(product)
+
+        return products
+
+    def _normalize_opportunity_product(
+        self,
+        *,
+        item: dict[str, Any],
+        opportunity: dict[str, Any],
+    ) -> ProductData | None:
+        """Convert a single newproduct.report item into ProductData."""
+        source_product_id = self._extract_opportunity_product_id(item)
+        title = self._extract_opportunity_product_title(item)
+        if not source_product_id or not title:
+            return None
+
+        source_url = self._extract_opportunity_product_url(item, source_product_id)
+        platform_price = self._extract_opportunity_product_price(item)
+        sales_count = self._extract_opportunity_product_sales(item)
+        main_image_url = self._extract_opportunity_product_image(item)
+        category = self._extract_opportunity_product_category(item)
+
+        normalized_attributes = {
+            "matched_keyword": opportunity.get("keyword"),
+            "report_keyword": (opportunity.get("evidence") or {}).get("report_keyword"),
+            "opportunity_provenance": {
+                "keyword": opportunity.get("keyword"),
+                "title": opportunity.get("title"),
+                "opportunity_score": opportunity.get("opportunity_score"),
+                "keyword_summary": opportunity.get("keyword_summary"),
+                "evidence": opportunity.get("evidence"),
+            },
+            "report_item_id": source_product_id,
+        }
+
+        return ProductData(
+            source_platform=SourcePlatform.ALIBABA_1688,
+            source_product_id=source_product_id,
+            source_url=source_url,
+            title=title,
+            category=category,
+            currency="USD",
+            platform_price=platform_price,
+            sales_count=sales_count,
+            rating=None,
+            main_image_url=main_image_url,
+            raw_payload={
+                "opportunity": opportunity,
+                "alphashop_report_item": item,
+            },
+            normalized_attributes=normalized_attributes,
+            supplier_candidates=[],
+        )
+
+    def _extract_opportunity_product_id(self, item: dict[str, Any]) -> str | None:
+        """Extract stable product identifier from newproduct.report item."""
+        for key in ("productId", "itemId", "offerId", "id"):
+            value = item.get(key)
+            if value is not None and str(value).strip():
+                return str(value).strip()
+        return None
+
+    def _extract_opportunity_product_title(self, item: dict[str, Any]) -> str:
+        """Extract title from newproduct.report item."""
+        for key in ("title", "productTitle", "name"):
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ""
+
+    def _extract_opportunity_product_url(self, item: dict[str, Any], source_product_id: str) -> str:
+        """Extract detail URL from newproduct.report item."""
+        for key in ("detailUrl", "productUrl", "offerDetailUrl", "url"):
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return f"https://detail.1688.com/offer/{source_product_id}.html"
+
+    def _extract_opportunity_product_image(self, item: dict[str, Any]) -> str | None:
+        """Extract primary image URL from newproduct.report item."""
+        for key in ("imageUrl", "mainImageUrl", "productImage"):
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+        image_urls = item.get("imageUrls")
+        if isinstance(image_urls, list):
+            for value in image_urls:
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+        return None
+
+    def _extract_opportunity_product_category(self, item: dict[str, Any]) -> str | None:
+        """Extract category from newproduct.report item when available."""
+        for key in ("category", "categoryName", "category_name"):
+            value = item.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
+
+    def _extract_opportunity_product_price(self, item: dict[str, Any]) -> Decimal | None:
+        """Extract platform price from newproduct.report item."""
+        value = item.get("price")
+        if isinstance(value, dict):
+            value = value.get("price") or value.get("amount")
+        return self._coerce_decimal(value)
+
+    def _extract_opportunity_product_sales(self, item: dict[str, Any]) -> int | None:
+        """Extract sales count from newproduct.report item."""
+        for key in ("salesCount", "sales", "orderCount"):
+            value = self._coerce_int(item.get(key))
+            if value is not None:
+                return value
+        return None
+
+    def _coerce_decimal(self, value: Any) -> Decimal | None:
+        """Convert arbitrary value to Decimal."""
+        if value is None or value == "":
+            return None
+        if isinstance(value, Decimal):
+            return value
+        if isinstance(value, (int, float)):
+            return Decimal(str(value))
+        if isinstance(value, str):
+            try:
+                return Decimal(value)
+            except Exception:
+                return None
+        return None
+
+    def _coerce_int(self, value: Any) -> int | None:
+        """Convert arbitrary value to int."""
+        if value is None or value == "":
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+        if isinstance(value, str):
+            try:
+                return int(float(value))
+            except Exception:
+                return None
+        return None
 
     def _sort_products_by_priority(
         self,

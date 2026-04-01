@@ -126,7 +126,52 @@ class SupplierMatcherService:
         return matches
 
     def _extract_from_1688_payload(self, *, raw_payload: dict) -> list[SupplierMatch]:
-        """Extract supplier information from raw 1688 payloads as a fallback."""
+        """Extract supplier information from raw 1688 payloads as a fallback.
+
+        Handles two payload structures:
+        1. Traditional structure: flat keys like company_name, source_url, etc.
+        2. Opportunity-first structure: alphashop_report_item with nested providerInfo.
+        """
+        # Handle opportunity-first structure: extract from AlphaShop report item
+        alphashop_item = raw_payload.get("alphashop_report_item")
+        if alphashop_item and isinstance(alphashop_item, dict):
+            provider_info = alphashop_item.get("providerInfo")
+            if isinstance(provider_info, dict):
+                company_name = provider_info.get("companyName")
+                shop_url = provider_info.get("shopUrl")
+
+                if company_name or shop_url:
+                    # Extract price from the report item
+                    supplier_price = None
+                    item_price = alphashop_item.get("itemPrice")
+                    if isinstance(item_price, dict):
+                        supplier_price = self._coerce_decimal(item_price.get("price"))
+
+                    # Extract MOQ from purchaseInfos
+                    moq = None
+                    purchase_infos = alphashop_item.get("purchaseInfos") or []
+                    for pi in purchase_infos:
+                        if isinstance(pi, dict):
+                            moq = self._coerce_int(pi.get("moq"))
+                            if moq is not None:
+                                break
+
+                    return [
+                        SupplierMatch(
+                            supplier_name=company_name or f"1688 Supplier {alphashop_item.get('itemId', 'unknown')}",
+                            supplier_url=shop_url or alphashop_item.get("offerDetailUrl") or "",
+                            supplier_sku=str(alphashop_item.get("itemId") or alphashop_item.get("productId") or ""),
+                            supplier_price=supplier_price,
+                            moq=moq,
+                            confidence_score=Decimal("0.80"),
+                            raw_payload={
+                                "source": "alphashop_report_item",
+                                "alphashop_report_item": alphashop_item,
+                                "provider_info": provider_info,
+                            },
+                        )
+                    ]
+
         detail_payload = raw_payload.get("detail_payload") or {}
         supplier_name = (
             detail_payload.get("company_name")

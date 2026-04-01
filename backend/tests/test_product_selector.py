@@ -14,6 +14,7 @@ from app.services.demand_validator import (
     TrendDirection,
 )
 from app.services.demand_discovery_service import DemandDiscoveryKeyword, DemandDiscoveryResult
+from app.services.opportunity_discovery_service import OpportunityDraft
 from app.services.source_adapter import ProductData
 
 
@@ -111,6 +112,124 @@ async def test_product_selector_uses_demand_discovery_before_fetching():
         candidate_count_per_discovery_mode=1,
         validated_keywords_count=1,
     )
+
+
+@pytest.mark.asyncio
+async def test_product_selector_uses_opportunity_products_for_1688():
+    """Selector should use opportunity report products directly on 1688."""
+    mock_adapter = AsyncMock()
+    mock_adapter.fetch_products.return_value = []
+
+    mock_supplier_matcher = AsyncMock()
+    mock_supplier_matcher.find_suppliers.return_value = []
+
+    mock_discovery = AsyncMock()
+    mock_discovery.discover_keywords.return_value = DemandDiscoveryResult(
+        validated_keywords=[
+            DemandDiscoveryKeyword(
+                keyword="tablet stand",
+                source="user",
+                validation=DemandValidationResult(
+                    keyword="tablet stand",
+                    search_volume=5000,
+                    competition_density=CompetitionDensity.LOW,
+                    trend_direction=TrendDirection.RISING,
+                    trend_growth_rate=None,
+                ),
+            )
+        ],
+        rejected_keywords=[],
+        discovery_mode="user",
+        fallback_used=False,
+        degraded=False,
+        valid_keywords=[
+            {
+                "seed": {
+                    "term": "tablet stand",
+                    "source": "user",
+                    "confidence": 1.0,
+                    "category": "electronics",
+                    "region": "US",
+                    "platform": "Amazon",
+                },
+                "matched_keyword": "tablet stand",
+                "match_type": "exact",
+                "opp_score": 82.0,
+                "search_volume": 5000,
+                "competition_density": "low",
+                "is_valid_for_report": True,
+                "raw": {"keyword": "tablet stand"},
+                "report_keyword": "tablet stand",
+            }
+        ],
+    )
+
+    mock_opportunity_service = AsyncMock()
+    mock_opportunity_service.discover_opportunities.return_value = [
+        OpportunityDraft(
+            keyword="tablet stand",
+            title="Rising tablet stand demand",
+            opportunity_score=88.0,
+            product_list=[
+                {
+                    "productId": "report-prod-1",
+                    "title": "Adjustable Tablet Stand",
+                    "detailUrl": "https://detail.1688.com/offer/report-prod-1.html",
+                    "imageUrl": "https://example.com/report-1.jpg",
+                    "price": "12.50",
+                    "salesCount": 3200,
+                    "category": "electronics",
+                }
+            ],
+            keyword_summary={"summary": "Rising tablet stand demand", "opportunityScore": 88},
+            evidence={"report_keyword": "tablet stand", "product_count": 1},
+            raw={"request_id": "req-1"},
+        )
+    ]
+
+    mock_db = MagicMock()
+    mock_db.add = MagicMock()
+    mock_db.commit = AsyncMock()
+    mock_db.rollback = AsyncMock()
+
+    agent = ProductSelectorAgent(
+        source_adapter=mock_adapter,
+        supplier_matcher=mock_supplier_matcher,
+        demand_discovery_service=mock_discovery,
+        opportunity_discovery_service=mock_opportunity_service,
+        enable_demand_validation=True,
+        enable_seasonal_boost=False,
+    )
+    agent.logger = MagicMock()
+
+    context = AgentContext(
+        strategy_run_id=uuid4(),
+        db=mock_db,
+        input_data={
+            "platform": "alibaba_1688",
+            "category": "electronics",
+            "keywords": ["tablet stand"],
+            "region": "US",
+            "max_candidates": 10,
+        },
+    )
+
+    result = await agent.execute(context)
+
+    assert result.success is True
+    assert result.output_data["count"] == 1
+    mock_adapter.fetch_products.assert_not_called()
+    mock_opportunity_service.discover_opportunities.assert_called_once()
+    mock_supplier_matcher.find_suppliers.assert_called_once()
+
+    candidate = mock_db.add.call_args_list[0].args[0]
+    assert candidate.source_product_id == "report-prod-1"
+    assert candidate.title == "Adjustable Tablet Stand"
+    assert candidate.normalized_attributes["matched_keyword"] == "tablet stand"
+    assert candidate.normalized_attributes["report_keyword"] == "tablet stand"
+    assert candidate.normalized_attributes["opportunity_keyword"] == "tablet stand"
+    assert candidate.normalized_attributes["opportunity_score"] == 88.0
+    assert candidate.demand_discovery_metadata["opportunity"]["keyword"] == "tablet stand"
 
 
 @pytest.mark.asyncio

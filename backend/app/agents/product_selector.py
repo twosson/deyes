@@ -9,6 +9,7 @@ Opportunity-first refactor (Phase 1):
   demand_discovery_metadata and normalized_attributes.
 """
 from decimal import Decimal
+import re
 from typing import Any, Optional
 from uuid import uuid4
 
@@ -238,9 +239,26 @@ class ProductSelectorAgent(BaseAgent):
                     self.source_adapter = MockSourceAdapter(platform)
 
             # Fetch products from source platform
-            # For AlphaShop path with opportunities, use opportunity products directly
-            # For other platforms or when no opportunities, use adapter fetch
-            if opportunities and platform == SourcePlatform.ALIBABA_1688:
+            # STRICT OPPORTUNITY-FIRST: For AlphaShop/1688, opportunity is mandatory
+            if platform == SourcePlatform.ALIBABA_1688:
+                if not opportunities:
+                    self.logger.error(
+                        "opportunity_first_failed_no_opportunities",
+                        strategy_run_id=str(context.strategy_run_id),
+                        platform=platform.value,
+                        validated_keywords_count=len(validated_keywords),
+                    )
+                    return AgentResult(
+                        success=False,
+                        error_message="No validated opportunities available for AlphaShop/1688 platform. Opportunity-first selection requires valid market opportunities.",
+                        output_data={
+                            "candidate_ids": [],
+                            "count": 0,
+                            "skipped_reason": "no_opportunities_for_1688",
+                            "demand_discovery": demand_discovery_payload,
+                        },
+                    )
+
                 # Use adapter normalization if available (preferred for 1688 field handling)
                 if isinstance(self.source_adapter, SourceAdapter) and hasattr(
                     self.source_adapter, "normalize_report_products"
@@ -249,7 +267,7 @@ class ProductSelectorAgent(BaseAgent):
                         opportunities=[opp.to_dict() for opp in opportunities],
                         price_min=Decimal(str(price_min)) if price_min else None,
                         price_max=Decimal(str(price_max)) if price_max else None,
-                        limit=max_candidates,
+                        limit=max_candidates * 3,  # Get more for filtering
                     )
                 else:
                     # Fallback to local normalization for non-AlphaShop adapters
@@ -257,7 +275,7 @@ class ProductSelectorAgent(BaseAgent):
                         opportunities=opportunities,
                         price_min=Decimal(str(price_min)) if price_min else None,
                         price_max=Decimal(str(price_max)) if price_max else None,
-                        limit=max_candidates,
+                        limit=max_candidates * 3,  # Get more for filtering
                     )
                 self.logger.info(
                     "products_from_opportunities",
@@ -267,6 +285,7 @@ class ProductSelectorAgent(BaseAgent):
                     strategy_run_id=str(context.strategy_run_id),
                 )
             else:
+                # For non-1688 platforms, use traditional adapter fetch
                 products = await self.source_adapter.fetch_products(
                     category=category,
                     keywords=validated_keywords,
@@ -297,6 +316,33 @@ class ProductSelectorAgent(BaseAgent):
                     strategy_run_id=str(context.strategy_run_id),
                 )
 
+            # Strict opportunity relevance filtering for AlphaShop/1688
+            if platform == SourcePlatform.ALIBABA_1688 and products:
+                products = self._filter_products_by_opportunity_relevance(
+                    products=products,
+                    opportunities=opportunities,
+                    discovery_mode=(demand_discovery_payload or {}).get("discovery_mode"),
+                    limit=max_candidates * 2,
+                )
+                self.logger.info(
+                    "products_filtered_by_opportunity_relevance",
+                    count=len(products),
+                    platform=platform.value,
+                    strategy_run_id=str(context.strategy_run_id),
+                )
+
+                if not products:
+                    return AgentResult(
+                        success=False,
+                        error_message="No relevant products remained after strict opportunity relevance filtering.",
+                        output_data={
+                            "candidate_ids": [],
+                            "count": 0,
+                            "skipped_reason": "no_relevant_products_after_opportunity_filter",
+                            "demand_discovery": demand_discovery_payload,
+                        },
+                    )
+
             # Sort products by priority score
             products_with_scores = []
             if products:
@@ -305,6 +351,13 @@ class ProductSelectorAgent(BaseAgent):
                     seasonal_boost=seasonal_boost,
                     validation_results=validation_results,
                 )
+
+                # Apply diversity constraints after scoring
+                if platform == SourcePlatform.ALIBABA_1688:
+                    products_with_scores = self._apply_product_diversity_constraints(
+                        products_with_scores=products_with_scores,
+                        max_candidates=max_candidates,
+                    )
 
                 self.logger.info(
                     "products_sorted_by_priority",
@@ -634,16 +687,10 @@ class ProductSelectorAgent(BaseAgent):
     ) -> list[tuple]:
         """按优先级分数排序产品.
 
-        委托给 ProductScoringService 执行评分逻辑.
-
-        Args:
-            products: List of ProductData objects
-            seasonal_boost: Seasonal boost factor for category
-            validation_results: Demand validation results (for competition density)
-
-        Returns:
-            List of tuples: [(product, priority_score), ...]
-            Sorted by priority score (highest first)
+        增强版排序：在原有销量/评分/季节性基础上，加入
+        - opportunity score
+        - keyword relevance
+        - exploration 模式服饰惩罚
         """
         scoring_service = ProductScoringService()
 
@@ -666,8 +713,17 @@ class ProductSelectorAgent(BaseAgent):
                 competition_density=competition_density,
             )
 
-            score_result = scoring_service.calculate_priority_score(score_input)
-            return score_result.total_score
+            base_score = scoring_service.calculate_priority_score(score_input).total_score
+
+            normalized_attributes = dict(product.normalized_attributes or {})
+            opportunity_provenance = normalized_attributes.get("opportunity_provenance") or {}
+            relevance_score = self._calculate_product_relevance_score(product)
+            opportunity_score = self._safe_float(opportunity_provenance.get("opportunity_score"))
+            opportunity_component = min(opportunity_score / 100.0, 1.0) * 0.25 if opportunity_score is not None else 0.0
+            relevance_component = relevance_score * 0.35
+            apparel_penalty = self._get_exploration_apparel_penalty(product)
+
+            return base_score + opportunity_component + relevance_component + apparel_penalty
 
         products_with_scores = [
             (product, calculate_priority_score(product)) for product in products
@@ -688,3 +744,116 @@ class ProductSelectorAgent(BaseAgent):
         )
 
         return products_with_scores
+
+    def _filter_products_by_opportunity_relevance(
+        self,
+        *,
+        products: list[ProductData],
+        opportunities: list[OpportunityDraft],
+        discovery_mode: Optional[str],
+        limit: int,
+    ) -> list[ProductData]:
+        """Filter products strictly by opportunity relevance."""
+        filtered: list[ProductData] = []
+        for product in products:
+            relevance_score = self._calculate_product_relevance_score(product)
+            if relevance_score < 0.2:
+                continue
+            if discovery_mode == "exploration" and self._is_apparel_product(product) and relevance_score < 0.5:
+                continue
+            filtered.append(product)
+            if len(filtered) >= limit:
+                break
+        return filtered
+
+    def _calculate_product_relevance_score(self, product: ProductData) -> float:
+        """Calculate strict relevance between product and opportunity keyword."""
+        normalized_attributes = dict(product.normalized_attributes or {})
+        opportunity_provenance = normalized_attributes.get("opportunity_provenance") or {}
+        keyword = (opportunity_provenance.get("keyword") or normalized_attributes.get("matched_keyword") or "").strip().lower()
+        report_keyword = (normalized_attributes.get("report_keyword") or "").strip().lower()
+        title = (product.title or "").strip().lower()
+        category = (product.category or "").strip().lower()
+
+        if not title:
+            return 0.0
+
+        keyword_tokens = self._tokenize_text(keyword)
+        report_tokens = self._tokenize_text(report_keyword)
+        title_tokens = self._tokenize_text(title)
+        category_tokens = self._tokenize_text(category)
+        expected_tokens = keyword_tokens | report_tokens
+        if not expected_tokens:
+            return 0.0
+
+        title_overlap = len(expected_tokens & title_tokens) / len(expected_tokens)
+        category_overlap = len(expected_tokens & category_tokens) / len(expected_tokens) if category_tokens else 0.0
+        exact_phrase_bonus = 0.25 if keyword and keyword in title else 0.0
+        report_phrase_bonus = 0.25 if report_keyword and report_keyword in title else 0.0
+
+        return min(1.0, title_overlap * 0.7 + category_overlap * 0.2 + exact_phrase_bonus + report_phrase_bonus)
+
+    def _apply_product_diversity_constraints(
+        self,
+        *,
+        products_with_scores: list[tuple],
+        max_candidates: int,
+    ) -> list[tuple]:
+        """Apply diversity constraints to avoid single-category collapse."""
+        selected: list[tuple] = []
+        category_counts: dict[str, int] = {}
+        title_fingerprints: set[str] = set()
+
+        for product, score in products_with_scores:
+            category_key = (product.category or "unknown").strip().lower()
+            if category_counts.get(category_key, 0) >= 3:
+                continue
+
+            fingerprint = self._fingerprint_title(product.title)
+            if fingerprint in title_fingerprints:
+                continue
+
+            category_counts[category_key] = category_counts.get(category_key, 0) + 1
+            title_fingerprints.add(fingerprint)
+            selected.append((product, score))
+
+            if len(selected) >= max_candidates:
+                break
+
+        return selected
+
+    def _get_exploration_apparel_penalty(self, product: ProductData) -> float:
+        """Penalize apparel in exploration mode unless strongly relevant."""
+        normalized_attributes = dict(product.normalized_attributes or {})
+        opportunity_provenance = normalized_attributes.get("opportunity_provenance") or {}
+        discovery_hint = opportunity_provenance.get("evidence", {}).get("seed", {}).get("source")
+        if discovery_hint != "trend" and discovery_hint != "supply":
+            return 0.0
+        if self._is_apparel_product(product):
+            return -0.2
+        return 0.0
+
+    def _is_apparel_product(self, product: ProductData) -> bool:
+        text = f"{product.title or ''} {(product.category or '')}".lower()
+        apparel_terms = {
+            "hoodie", "hoodies", "sweatshirt", "sweatshirts", "shirt", "shirts",
+            "t-shirt", "tee", "tees", "jacket", "jackets", "coat", "coats",
+            "dress", "dresses", "pants", "jeans", "shorts", "skirt", "apparel",
+            "clothing", "fashion", "wear", "卫衣", "服装", "上衣"
+        }
+        return any(term in text for term in apparel_terms)
+
+    def _tokenize_text(self, text: str) -> set[str]:
+        return {token for token in re.split(r"[^a-z0-9\u4e00-\u9fff]+", text.lower()) if token and len(token) >= 2}
+
+    def _fingerprint_title(self, title: str) -> str:
+        tokens = sorted(self._tokenize_text(title))
+        return " ".join(tokens[:8])
+
+    def _safe_float(self, value: Any) -> float | None:
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None

@@ -20,13 +20,13 @@ from app.services.source_adapter import ProductData
 
 @pytest.mark.asyncio
 async def test_product_selector_uses_demand_discovery_before_fetching():
-    """Selector should fetch products only with demand-discovered keywords."""
+    """Selector should fetch products only with demand-discovered keywords (non-1688 platform)."""
     mock_adapter = AsyncMock()
     mock_adapter.fetch_products.return_value = [
         ProductData(
-            source_platform=SourcePlatform.ALIBABA_1688,
+            source_platform=SourcePlatform.TEMU,
             source_product_id="prod-1",
-            source_url="https://detail.1688.com/offer/prod-1.html",
+            source_url="https://www.temu.com/prod-1.html",
             title="Validated Product",
             category="electronics",
             currency="USD",
@@ -82,7 +82,7 @@ async def test_product_selector_uses_demand_discovery_before_fetching():
         strategy_run_id=uuid4(),
         db=mock_db,
         input_data={
-            "platform": "alibaba_1688",
+            "platform": "temu",
             "category": "electronics",
             "keywords": None,
             "region": "US",
@@ -96,7 +96,7 @@ async def test_product_selector_uses_demand_discovery_before_fetching():
     assert result.output_data["count"] == 1
     assert result.output_data["demand_discovery"]["discovery_mode"] == "generated"
     mock_discovery.discover_keywords.assert_called_once()
-    assert mock_discovery.discover_keywords.call_args.kwargs["platform"] == "alibaba_1688"
+    assert mock_discovery.discover_keywords.call_args.kwargs["platform"] == "temu"
     mock_adapter.fetch_products.assert_called_once()
     assert mock_adapter.fetch_products.call_args.kwargs["keywords"] == ["validated keyword"]
     agent.logger.info.assert_any_call(
@@ -104,7 +104,7 @@ async def test_product_selector_uses_demand_discovery_before_fetching():
         strategy_run_id=str(context.strategy_run_id),
         category="electronics",
         region="US",
-        platform="alibaba_1688",
+        platform="temu",
         discovery_mode="generated",
         skipped=False,
         skip_rate=0.0,
@@ -292,16 +292,88 @@ async def test_product_selector_skips_when_no_validated_keywords():
     assert result.output_data["skipped_reason"] == "no_validated_keywords_available"
     assert result.output_data["demand_discovery"]["discovery_mode"] == "none"
     mock_adapter.fetch_products.assert_not_called()
-    agent.logger.info.assert_any_call(
-        "product_selection_metrics",
-        strategy_run_id=str(context.strategy_run_id),
-        category="electronics",
-        region="US",
-        platform="alibaba_1688",
-        discovery_mode="none",
-        skipped=True,
-        skip_rate=1.0,
-        selection_triggered_per_category=0,
-        candidate_count_per_discovery_mode=0,
-        validated_keywords_count=0,
+
+
+@pytest.mark.asyncio
+async def test_product_selector_1688_fails_when_no_opportunities():
+    """1688 should fail fast when no opportunities are discovered, without fallback fetch."""
+    mock_adapter = AsyncMock()
+    mock_adapter.fetch_products.return_value = []
+
+    mock_supplier_matcher = AsyncMock()
+    mock_supplier_matcher.find_suppliers.return_value = []
+
+    mock_discovery = AsyncMock()
+    mock_discovery.discover_keywords.return_value = DemandDiscoveryResult(
+        validated_keywords=[
+            DemandDiscoveryKeyword(
+                keyword="tablet stand",
+                source="user",
+                validation=DemandValidationResult(
+                    keyword="tablet stand",
+                    search_volume=5000,
+                    competition_density=CompetitionDensity.LOW,
+                    trend_direction=TrendDirection.RISING,
+                    trend_growth_rate=None,
+                ),
+            )
+        ],
+        rejected_keywords=[],
+        discovery_mode="user",
+        fallback_used=False,
+        degraded=False,
+        valid_keywords=[
+            {
+                "seed": {
+                    "term": "tablet stand",
+                    "source": "user",
+                    "confidence": 1.0,
+                },
+                "matched_keyword": "tablet stand",
+                "match_type": "exact",
+                "opp_score": 82.0,
+                "search_volume": 5000,
+                "competition_density": "low",
+                "is_valid_for_report": True,
+                "raw": {"keyword": "tablet stand"},
+                "report_keyword": "tablet stand",
+            }
+        ],
     )
+
+    mock_opportunity_service = AsyncMock()
+    mock_opportunity_service.discover_opportunities.return_value = []
+
+    mock_db = MagicMock()
+    mock_db.add = MagicMock()
+    mock_db.commit = AsyncMock()
+    mock_db.rollback = AsyncMock()
+
+    agent = ProductSelectorAgent(
+        source_adapter=mock_adapter,
+        supplier_matcher=mock_supplier_matcher,
+        demand_discovery_service=mock_discovery,
+        opportunity_discovery_service=mock_opportunity_service,
+        enable_demand_validation=True,
+        enable_seasonal_boost=False,
+    )
+
+    context = AgentContext(
+        strategy_run_id=uuid4(),
+        db=mock_db,
+        input_data={
+            "platform": "alibaba_1688",
+            "category": "electronics",
+            "keywords": ["tablet stand"],
+            "region": "US",
+            "max_candidates": 10,
+        },
+    )
+
+    result = await agent.execute(context)
+
+    assert result.success is False
+    assert "No validated opportunities available" in result.error_message
+    assert result.output_data["skipped_reason"] == "no_opportunities_for_1688"
+    mock_adapter.fetch_products.assert_not_called()
+    mock_db.add.assert_not_called()

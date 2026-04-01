@@ -23,7 +23,7 @@ async def test_selector_output_includes_demand_discovery_metadata():
     mock_adapter = AsyncMock()
     mock_adapter.fetch_products.return_value = [
         ProductData(
-            source_platform=SourcePlatform.ALIBABA_1688,
+            source_platform=SourcePlatform.TEMU,
             source_product_id="prod-1",
             source_url="https://detail.1688.com/offer/prod-1.html",
             title="Test Product",
@@ -92,7 +92,7 @@ async def test_selector_output_includes_demand_discovery_metadata():
         strategy_run_id=uuid4(),
         db=mock_db,
         input_data={
-            "platform": "alibaba_1688",
+            "platform": "temu",
             "category": "electronics",
             "keywords": ["rejected keyword"],
             "region": "US",
@@ -181,7 +181,7 @@ async def test_selector_logs_demand_discovery_completed_with_counts():
         strategy_run_id=uuid4(),
         db=mock_db,
         input_data={
-            "platform": "alibaba_1688",
+            "platform": "temu",
             "category": "electronics",
             "keywords": ["kw1", "kw2", "bad"],
             "region": "US",
@@ -229,7 +229,7 @@ async def test_selector_zero_keywords_includes_skipped_reason():
         strategy_run_id=uuid4(),
         db=mock_db,
         input_data={
-            "platform": "alibaba_1688",
+            "platform": "temu",
             "category": "electronics",
             "keywords": None,
             "region": "US",
@@ -253,7 +253,7 @@ async def test_selector_persists_demand_discovery_metadata_to_candidates():
     mock_adapter = AsyncMock()
     mock_adapter.fetch_products.return_value = [
         ProductData(
-            source_platform=SourcePlatform.ALIBABA_1688,
+            source_platform=SourcePlatform.TEMU,
             source_product_id="prod-1",
             source_url="https://detail.1688.com/offer/prod-1.html",
             title="Test Product",
@@ -322,7 +322,7 @@ async def test_selector_persists_demand_discovery_metadata_to_candidates():
         strategy_run_id=uuid4(),
         db=mock_db,
         input_data={
-            "platform": "alibaba_1688",
+            "platform": "temu",
             "category": "electronics",
             "keywords": ["rejected keyword"],
             "region": "US",
@@ -392,7 +392,7 @@ async def test_selector_skipped_flow_returns_skipped_reason_without_creating_can
         strategy_run_id=uuid4(),
         db=mock_db,
         input_data={
-            "platform": "alibaba_1688",
+            "platform": "temu",
             "category": "electronics",
             "keywords": None,
             "region": "US",

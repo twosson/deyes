@@ -108,13 +108,12 @@ class OpportunityDiscoveryService:
                     continue
 
                 # AlphaShop contract: newproduct.report requires strict productKeyword from keyword.search.
-                # Fail immediately on parameter rejection instead of masking with retry.
+                # Only send required parameters to avoid FAIL_REQUEST_PARAMETER_ILLEGAL.
+                # Optional parameters (listingTime, size) may not be supported for all keywords.
                 response = await client.newproduct_report(
                     platform=platform,
                     region=region,
                     product_keyword=report_keyword,
-                    listing_time=self.settings.keyword_generation_listing_time,
-                    size=report_size,
                 )
 
                 product_list = response.get("product_list") or []

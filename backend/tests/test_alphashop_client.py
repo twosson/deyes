@@ -181,7 +181,6 @@ class TestAlphaShopClient:
                 platform="amazon",
                 region="US",
                 product_keyword="phone stand",
-                listing_time="180",
                 size=10,
             )
 
@@ -209,7 +208,6 @@ class TestAlphaShopClient:
                 platform="amazon",
                 region="US",
                 product_keyword="phone stand",
-                listing_time="180",
                 size=10,
             )
 

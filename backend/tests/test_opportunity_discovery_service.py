@@ -101,8 +101,6 @@ class TestOpportunityDiscoveryService:
             platform="amazon",
             region="US",
             product_keyword="tablet stand",
-            listing_time=service.settings.keyword_generation_listing_time,
-            size=10,
         )
 
     @pytest.mark.asyncio

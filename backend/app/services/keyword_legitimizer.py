@@ -134,13 +134,15 @@ class KeywordLegitimizerService:
                 # Determine match type
                 match_type = self._determine_match_type(seed.term, matched_keyword)
 
-                # Check if valid for report
+                # Check if valid for report - stricter filtering for newproduct.report
+                # Only allow exact and normalized matches to avoid parameter rejection
                 is_valid = (
                     opp_score is not None
                     and opp_score >= min_opp_score
                     and matched_keyword
                     and report_keyword
                     and not self._is_too_generic(matched_keyword)
+                    and match_type in ("exact", "normalized")
                 )
 
                 valid_keywords.append(
@@ -268,6 +270,16 @@ class KeywordLegitimizerService:
             "jewelry",
             "wireless electronics",
             "home electronics",
+            "phone accessories",
+            "kitchen gadgets",
+            "home goods",
+            "accessories",
+            "gadgets",
+            "essentials",
+            "spring essentials",
+            "summer essentials",
+            "winter essentials",
+            "fall essentials",
         ]
         brand_keywords = [
             "iphone",
@@ -302,6 +314,10 @@ class KeywordLegitimizerService:
         ]
         keyword_lower = keyword.lower().strip()
         if keyword_lower in generic_patterns:
+            return True
+        if re.search(r"\bessentials\b", keyword_lower):
+            return True
+        if re.fullmatch(r"[a-z0-9\s\-]*\b(accessories|gadgets|goods)\b", keyword_lower):
             return True
         # Check if keyword contains any brand term
         for brand in brand_keywords:

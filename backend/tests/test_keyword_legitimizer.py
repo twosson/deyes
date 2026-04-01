@@ -144,7 +144,8 @@ class TestKeywordLegitimizerService:
 
         assert results[0].match_type == "exact"
         assert results[1].match_type == "normalized"
-        assert results[2].match_type in ["related", "fallback"]
+        # Related/fallback matches are no longer valid for report
+        assert results[2].is_valid_for_report is False
 
     @pytest.mark.asyncio
     async def test_legitimize_seeds_filters_generic_keywords(self):
@@ -322,6 +323,35 @@ class TestKeywordLegitimizerService:
 
         assert len(results) == 2
         mock_sleep.assert_awaited_once_with(0.25)
+
+
+    @pytest.mark.asyncio
+    async def test_legitimize_seeds_filters_problematic_report_keywords(self):
+        """Test legitimization rejects generic keywords that trigger newproduct.report parameter errors."""
+        mock_client = AsyncMock()
+        mock_client.search_keywords.side_effect = [
+            {"keyword_list": [{"keyword": "phone accessories", "oppScore": 80, "searchVolume": 10000}]},
+            {"keyword_list": [{"keyword": "kitchen gadgets", "oppScore": 75, "searchVolume": 8000}]},
+            {"keyword_list": [{"keyword": "spring essentials for women", "oppScore": 70, "searchVolume": 6000}]},
+        ]
+
+        service = KeywordLegitimizerService(alphashop_client=mock_client)
+
+        seeds = [
+            Seed(term="phone accessories", source="exploration", confidence=0.5),
+            Seed(term="kitchen gadgets", source="exploration", confidence=0.5),
+            Seed(term="spring essentials for women", source="exploration", confidence=0.5),
+        ]
+
+        results = await service.legitimize_seeds(
+            seeds=seeds,
+            region="US",
+            platform="amazon",
+            min_opp_score=20.0,
+        )
+
+        assert len(results) == 3
+        assert all(result.is_valid_for_report is False for result in results)
 
     @pytest.mark.asyncio
     async def test_legitimize_seeds_without_client(self):

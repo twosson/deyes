@@ -121,7 +121,7 @@ class AlphaShopClient:
         platform: str,
         region: str,
         product_keyword: str,
-        listing_time: str | None = "180",
+        listing_time: str | None = None,
         size: int | None = None,
     ) -> dict[str, Any]:
         """Call AlphaShop new product report API for a validated keyword."""

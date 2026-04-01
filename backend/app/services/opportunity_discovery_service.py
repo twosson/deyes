@@ -111,8 +111,8 @@ class OpportunityDiscoveryService:
                 # Only send required parameters to avoid FAIL_REQUEST_PARAMETER_ILLEGAL.
                 # Optional parameters (listingTime, size) may not be supported for all keywords.
                 response = await client.newproduct_report(
-                    platform=platform,
-                    region=region,
+                    target_platform=platform,
+                    target_country=region,
                     product_keyword=report_keyword,
                 )
 

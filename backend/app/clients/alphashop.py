@@ -118,22 +118,16 @@ class AlphaShopClient:
     async def newproduct_report(
         self,
         *,
-        platform: str,
-        region: str,
+        target_platform: str,
+        target_country: str,
         product_keyword: str,
-        listing_time: str | None = None,
-        size: int | None = None,
     ) -> dict[str, Any]:
         """Call AlphaShop new product report API for a validated keyword."""
         payload: dict[str, Any] = {
-            "platform": self._normalize_market_platform(platform),
-            "region": region,
+            "targetPlatform": self._normalize_report_target_platform(target_platform),
+            "targetCountry": target_country,
             "productKeyword": product_keyword,
         }
-        if listing_time is not None:
-            payload["listingTime"] = listing_time
-        if size is not None:
-            payload["size"] = size
 
         response = await self._request(self.NEWPRODUCT_REPORT_ENDPOINT, payload)
         product_list = self._extract_newproduct_list(response)
@@ -299,6 +293,13 @@ class AlphaShopClient:
         if normalized in {"tiktok", "tiktok_shop"}:
             return "TikTok"
         return "Amazon"
+
+    def _normalize_report_target_platform(self, platform: str | None) -> str:
+        """Normalize newproduct.report targetPlatform to AlphaShop's documented lowercase values."""
+        normalized = (platform or "").strip().lower()
+        if normalized in {"tiktok", "tiktok_shop"}:
+            return "tiktok"
+        return "amazon"
 
     def _build_authorization_header(self) -> str:
         """Build Bearer Authorization header value."""

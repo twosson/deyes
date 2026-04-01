@@ -178,10 +178,9 @@ class TestAlphaShopClient:
             mock_request.return_value = mock_response
 
             result = await client.newproduct_report(
-                platform="amazon",
-                region="US",
+                target_platform="amazon",
+                target_country="US",
                 product_keyword="phone stand",
-                size=10,
             )
 
         assert result["request_id"] == "req-789"
@@ -205,14 +204,14 @@ class TestAlphaShopClient:
             }
 
             await client.newproduct_report(
-                platform="amazon",
-                region="US",
+                target_platform="amazon",
+                target_country="US",
                 product_keyword="phone stand",
-                size=10,
             )
 
         call_args = mock_request.call_args
-        assert call_args[0][1]["platform"] == "Amazon"
+        assert call_args[0][1]["targetPlatform"] == "amazon"
+        assert call_args[0][1]["targetCountry"] == "US"
         assert call_args[0][1]["productKeyword"] == "phone stand"
 
     @pytest.mark.asyncio

@@ -98,8 +98,8 @@ class TestOpportunityDiscoveryService:
 
         assert len(opportunities) == 1
         mock_client.newproduct_report.assert_awaited_once_with(
-            platform="amazon",
-            region="US",
+            target_platform="amazon",
+            target_country="US",
             product_keyword="tablet stand",
         )
 

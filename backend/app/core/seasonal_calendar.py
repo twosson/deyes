@@ -272,7 +272,7 @@ class SeasonalCalendar:
 
             self.logger.debug(
                 "seasonal_boost_calculation",
-                event=event.name,
+                event_name=event.name,
                 category=category,
                 days_until=days_until,
                 boost=boost,

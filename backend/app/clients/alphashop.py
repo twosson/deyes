@@ -229,6 +229,13 @@ class AlphaShopClient:
         settings = get_settings()
         last_error: Exception | None = None
 
+        # Log request payload for debugging
+        logger.debug(
+            "alphashop_request_payload",
+            endpoint=endpoint,
+            payload=payload,
+        )
+
         for attempt in range(1, max(self.max_retries, 1) + 1):
             try:
                 response = await client.post(
@@ -238,6 +245,14 @@ class AlphaShopClient:
                 )
                 response.raise_for_status()
                 data = response.json()
+
+                # Log raw response for debugging
+                logger.debug(
+                    "alphashop_response_raw",
+                    endpoint=endpoint,
+                    response=data,
+                )
+
                 self._ensure_success(data, endpoint=endpoint)
                 return data
             except RuntimeError as exc:

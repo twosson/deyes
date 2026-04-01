@@ -110,6 +110,15 @@ class OpportunityDiscoveryService:
                 # AlphaShop contract: newproduct.report requires strict productKeyword from keyword.search.
                 # Only send required parameters to avoid FAIL_REQUEST_PARAMETER_ILLEGAL.
                 # Optional parameters (listingTime, size) may not be supported for all keywords.
+                self.logger.info(
+                    "opportunity_report_request",
+                    keyword=valid_kw.matched_keyword,
+                    report_keyword=report_keyword,
+                    target_platform=platform,
+                    target_country=region,
+                    opp_score=valid_kw.opp_score,
+                )
+
                 response = await client.newproduct_report(
                     target_platform=platform,
                     target_country=region,
@@ -155,7 +164,10 @@ class OpportunityDiscoveryService:
                 self.logger.warning(
                     "opportunity_discovery_failed",
                     keyword=valid_kw.matched_keyword,
+                    report_keyword=valid_kw.report_keyword,
                     opp_score=valid_kw.opp_score,
+                    target_platform=platform,
+                    target_country=region,
                     error=str(exc),
                     error_type=type(exc).__name__,
                 )

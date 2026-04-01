@@ -246,7 +246,9 @@ class KeywordLegitimizerService:
         return "fallback"
 
     def _is_too_generic(self, keyword: str) -> bool:
-        """Check if keyword is too generic or contains brand terms for newproduct.report."""
+        """Check if keyword is too generic, contains brand terms, or has invalid format for newproduct.report."""
+        import re
+
         generic_patterns = [
             "electronics",
             "fashion",
@@ -269,6 +271,25 @@ class KeywordLegitimizerService:
             "lg",
             "dell",
             "hp",
+            # E-reader brands
+            "bigme",
+            "boox",
+            "onyx",
+            "kindle",
+            "kobo",
+            "pocketbook",
+            "remarkable",
+            # Other common brands
+            "xiaomi",
+            "huawei",
+            "lenovo",
+            "asus",
+            "acer",
+            "microsoft",
+            "google",
+            "fitbit",
+            "garmin",
+            "gopro",
         ]
         keyword_lower = keyword.lower().strip()
         if keyword_lower in generic_patterns:
@@ -277,6 +298,17 @@ class KeywordLegitimizerService:
         for brand in brand_keywords:
             if brand in keyword_lower:
                 return True
+        # Filter age ranges and year ranges like "8-12", "3-5 years"
+        if re.search(r"\b\d+\s*-\s*\d+\b", keyword_lower):
+            return True
+        if re.search(r"\b\d+\s*(year|years|yr|yrs|age|ages)\b", keyword_lower):
+            return True
+        # Filter non-ASCII keywords to avoid unsupported locale issues
+        if any(ord(char) > 127 for char in keyword):
+            return True
+        # Filter keywords with too many special characters
+        if re.search(r"[^a-z0-9\s\-]", keyword_lower):
+            return True
         return False
 
     def _extract_keyword_text(self, item: dict) -> str:

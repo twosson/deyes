@@ -160,8 +160,12 @@ class KeywordGenerator:
             limit=limit,
         )
 
+        # When category is None, use a generic seed that AlphaShop can expand
+        # rather than hardcoding "electronics"
+        effective_category = category if category else "home goods"
+
         base_keywords = await self.generate_trending_keywords(
-            category=category or "electronics",
+            category=effective_category,
             region=region,
             limit=limit,
         )

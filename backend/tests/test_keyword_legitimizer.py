@@ -86,6 +86,7 @@ class TestKeywordLegitimizerService:
 
         assert len(results) == 1
         assert results[0].is_valid_for_report is False
+        assert results[0].competition_density == "high"
 
     @pytest.mark.asyncio
     async def test_legitimize_seeds_handles_no_results(self):

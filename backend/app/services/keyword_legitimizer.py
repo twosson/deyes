@@ -308,12 +308,21 @@ class KeywordLegitimizerService:
         return None
 
     def _extract_competition_density(self, item: dict) -> str:
-        """Extract competition density from AlphaShop result."""
+        """Extract competition density from AlphaShop result.
+
+        Competition density is derived from opportunity score:
+        - opp_score >= 70: LOW competition (strong opportunity)
+        - opp_score >= 40: MEDIUM competition (moderate opportunity)
+        - opp_score >= 20: MEDIUM competition (acceptable opportunity, not high)
+        - opp_score < 20: HIGH competition (weak opportunity)
+
+        This aligns with min_opp_score filter which defaults to 20.0.
+        """
         opp_score = self._extract_opp_score(item)
         if opp_score is not None:
             if opp_score >= 70:
                 return "low"
-            if opp_score >= 40:
+            if opp_score >= 20:
                 return "medium"
             return "high"
 

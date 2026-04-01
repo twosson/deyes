@@ -142,6 +142,7 @@ class ProductSelectorAgent(BaseAgent):
                                 competition_density=vk_dict.get("competition_density", "unknown"),
                                 is_valid_for_report=vk_dict.get("is_valid_for_report", False),
                                 raw=vk_dict.get("raw", {}),
+                                report_keyword=vk_dict.get("report_keyword"),
                             )
                             valid_keyword_objects.append(valid_kw)
 

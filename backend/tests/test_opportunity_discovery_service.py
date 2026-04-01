@@ -43,6 +43,7 @@ class TestOpportunityDiscoveryService:
                 competition_density="low",
                 is_valid_for_report=True,
                 raw={},
+                report_keyword="phone case",
             )
         ]
 
@@ -58,6 +59,84 @@ class TestOpportunityDiscoveryService:
         assert opportunities[0].keyword == "phone case"
         assert opportunities[0].opportunity_score == 85
         assert len(opportunities[0].product_list) == 2
+
+    @pytest.mark.asyncio
+    async def test_discover_opportunities_uses_report_keyword_for_api_calls(self):
+        """Test newproduct.report uses strict keyword.search `keyword` field."""
+        mock_client = AsyncMock()
+        mock_client.newproduct_report.return_value = {
+            "product_list": [{"productId": "p1", "title": "Product 1"}],
+            "keyword_summary": {"opportunityScore": 80},
+            "request_id": "req-123",
+            "raw": {},
+        }
+
+        service = OpportunityDiscoveryService(alphashop_client=mock_client)
+
+        seed = Seed(term="ipad tablet", source="user", confidence=1.0)
+        valid_keywords = [
+            ValidKeyword(
+                seed=seed,
+                matched_keyword="mini ipad tablet",
+                match_type="related",
+                opp_score=75.0,
+                search_volume=5000,
+                competition_density="low",
+                is_valid_for_report=True,
+                raw={"keyword": "tablet stand"},
+                report_keyword="tablet stand",
+            )
+        ]
+
+        opportunities = await service.discover_opportunities(
+            valid_keywords=valid_keywords,
+            region="US",
+            platform="amazon",
+            max_reports=5,
+            report_size=10,
+        )
+
+        assert len(opportunities) == 1
+        mock_client.newproduct_report.assert_awaited_once_with(
+            platform="amazon",
+            region="US",
+            product_keyword="tablet stand",
+            listing_time=service.settings.keyword_generation_listing_time,
+            size=10,
+        )
+
+    @pytest.mark.asyncio
+    async def test_discover_opportunities_skips_missing_report_keyword(self):
+        """Test opportunity discovery skips report-safe items missing strict report keyword."""
+        mock_client = AsyncMock()
+
+        service = OpportunityDiscoveryService(alphashop_client=mock_client)
+
+        seed = Seed(term="phone case", source="user", confidence=1.0)
+        valid_keywords = [
+            ValidKeyword(
+                seed=seed,
+                matched_keyword="phone case",
+                match_type="exact",
+                opp_score=75.0,
+                search_volume=5000,
+                competition_density="low",
+                is_valid_for_report=True,
+                raw={},
+                report_keyword=None,
+            )
+        ]
+
+        opportunities = await service.discover_opportunities(
+            valid_keywords=valid_keywords,
+            region="US",
+            platform="amazon",
+            max_reports=5,
+            report_size=10,
+        )
+
+        assert len(opportunities) == 0
+        mock_client.newproduct_report.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_discover_opportunities_filters_invalid_keywords(self):
@@ -77,6 +156,7 @@ class TestOpportunityDiscoveryService:
                 competition_density="high",
                 is_valid_for_report=False,
                 raw={},
+                report_keyword="generic electronics",
             )
         ]
 
@@ -115,6 +195,7 @@ class TestOpportunityDiscoveryService:
                 competition_density="low",
                 is_valid_for_report=True,
                 raw={},
+                report_keyword="obscure product",
             )
         ]
 
@@ -161,6 +242,7 @@ class TestOpportunityDiscoveryService:
                 competition_density="low",
                 is_valid_for_report=True,
                 raw={},
+                report_keyword="keyword1",
             ),
             ValidKeyword(
                 seed=seed2,
@@ -171,6 +253,7 @@ class TestOpportunityDiscoveryService:
                 competition_density="low",
                 is_valid_for_report=True,
                 raw={},
+                report_keyword="keyword2",
             ),
         ]
 
@@ -204,6 +287,7 @@ class TestOpportunityDiscoveryService:
                 competition_density="low",
                 is_valid_for_report=True,
                 raw={},
+                report_keyword=seed.term,
             )
             for i, seed in enumerate(seeds)
         ]
@@ -238,6 +322,7 @@ class TestOpportunityDiscoveryService:
                 competition_density="low",
                 is_valid_for_report=True,
                 raw={},
+                report_keyword="phone case",
             )
         ]
 
@@ -267,6 +352,7 @@ class TestOpportunityDiscoveryService:
                 competition_density="low",
                 is_valid_for_report=True,
                 raw={},
+                report_keyword="phone case",
             )
         ]
 

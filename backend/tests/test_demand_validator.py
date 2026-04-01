@@ -743,6 +743,7 @@ class TestDemandValidatorAlphaShop:
                     ],
                 },
             },
+            report_keyword="mini ipad tablet",
         )
 
         with patch.object(validator, "_get_search_trends", new_callable=AsyncMock) as mock_get_trends:

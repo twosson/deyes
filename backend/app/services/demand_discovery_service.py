@@ -358,6 +358,7 @@ class DemandDiscoveryService:
             {
                 "seed": item.seed.to_dict(),
                 "matched_keyword": item.matched_keyword,
+                "report_keyword": item.report_keyword,
                 "match_type": item.match_type,
                 "is_valid_for_report": item.is_valid_for_report,
             }
@@ -365,7 +366,7 @@ class DemandDiscoveryService:
         ]
 
         report_safe_keywords = [
-            item for item in valid_keyword_results if item.is_valid_for_report and item.matched_keyword
+            item for item in valid_keyword_results if item.is_valid_for_report and item.report_keyword
         ]
 
         if report_safe_keywords:

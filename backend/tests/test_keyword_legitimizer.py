@@ -45,6 +45,7 @@ class TestKeywordLegitimizerService:
 
         assert len(results) == 1
         assert results[0].matched_keyword == "wireless charger"
+        assert results[0].report_keyword == "wireless charger"
         assert results[0].match_type == "exact"
         assert results[0].opp_score == 75
         assert results[0].search_volume == 5000
@@ -219,6 +220,46 @@ class TestKeywordLegitimizerService:
 
         assert len(results) == 1
         assert results[0].matched_keyword == "mini ipad tablet"
+        assert results[0].report_keyword == "mini ipad tablet"
+        assert results[0].is_valid_for_report is False
+
+    @pytest.mark.asyncio
+    async def test_legitimize_seeds_requires_strict_keyword_field_for_report(self):
+        """Test report-safe keywords require AlphaShop's strict `keyword` field."""
+        mock_client = AsyncMock()
+        mock_client.search_keywords.return_value = {
+            "keyword_list": [
+                {
+                    "title": "wireless charger",
+                    "oppScore": 75,
+                    "searchVolume": 5000,
+                }
+            ]
+        }
+
+        service = KeywordLegitimizerService(alphashop_client=mock_client)
+
+        seeds = [
+            Seed(
+                term="wireless charger",
+                source="user",
+                confidence=1.0,
+                category="electronics",
+                region="US",
+                platform="amazon",
+            )
+        ]
+
+        results = await service.legitimize_seeds(
+            seeds=seeds,
+            region="US",
+            platform="amazon",
+            min_opp_score=20.0,
+        )
+
+        assert len(results) == 1
+        assert results[0].matched_keyword == "wireless charger"
+        assert results[0].report_keyword is None
         assert results[0].is_valid_for_report is False
 
     @pytest.mark.asyncio

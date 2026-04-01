@@ -98,12 +98,21 @@ class OpportunityDiscoveryService:
 
         for valid_kw in report_keywords:
             try:
+                report_keyword = valid_kw.report_keyword
+                if not report_keyword:
+                    self.logger.info(
+                        "opportunity_report_skipped_missing_report_keyword",
+                        keyword=valid_kw.matched_keyword,
+                        match_type=valid_kw.match_type,
+                    )
+                    continue
+
                 # Try with listing_time first
                 try:
                     response = await client.newproduct_report(
                         platform=platform,
                         region=region,
-                        product_keyword=valid_kw.matched_keyword,
+                        product_keyword=report_keyword,
                         listing_time=self.settings.keyword_generation_listing_time,
                         size=report_size,
                     )
@@ -114,12 +123,13 @@ class OpportunityDiscoveryService:
                         self.logger.info(
                             "opportunity_report_retry_minimal_payload",
                             keyword=valid_kw.matched_keyword,
+                            report_keyword=report_keyword,
                             original_error=str(exc),
                         )
                         response = await client.newproduct_report(
                             platform=platform,
                             region=region,
-                            product_keyword=valid_kw.matched_keyword,
+                            product_keyword=report_keyword,
                             listing_time=None,
                             size=None,
                         )
@@ -144,6 +154,7 @@ class OpportunityDiscoveryService:
                 evidence = {
                     "seed": valid_kw.seed.to_dict(),
                     "valid_keyword": valid_kw.to_dict(),
+                    "report_keyword": report_keyword,
                     "keyword_summary": keyword_summary,
                     "product_count": len(product_list),
                 }

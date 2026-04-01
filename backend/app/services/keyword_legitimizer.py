@@ -28,6 +28,7 @@ class ValidKeyword:
     competition_density: str  # "low" / "medium" / "high"
     is_valid_for_report: bool
     raw: dict[str, Any]
+    report_keyword: Optional[str] = None
 
     def to_dict(self) -> dict:
         """Convert to dictionary."""
@@ -40,6 +41,7 @@ class ValidKeyword:
             "competition_density": self.competition_density,
             "is_valid_for_report": self.is_valid_for_report,
             "raw": self.raw,
+            "report_keyword": self.report_keyword,
         }
 
 
@@ -127,6 +129,7 @@ class KeywordLegitimizerService:
                 search_volume = self._extract_search_volume(best_match)
                 competition_density = self._extract_competition_density(best_match)
                 matched_keyword = self._extract_keyword_text(best_match)
+                report_keyword = self._extract_report_keyword(best_match)
 
                 # Determine match type
                 match_type = self._determine_match_type(seed.term, matched_keyword)
@@ -136,6 +139,7 @@ class KeywordLegitimizerService:
                     opp_score is not None
                     and opp_score >= min_opp_score
                     and matched_keyword
+                    and report_keyword
                     and not self._is_too_generic(matched_keyword)
                 )
 
@@ -149,6 +153,7 @@ class KeywordLegitimizerService:
                         competition_density=competition_density,
                         is_valid_for_report=is_valid,
                         raw=best_match,
+                        report_keyword=report_keyword,
                     )
                 )
 
@@ -326,6 +331,17 @@ class KeywordLegitimizerService:
                     return value.strip()
 
         return ""
+
+    def _extract_report_keyword(self, item: dict) -> Optional[str]:
+        """Extract strict report-safe keyword from AlphaShop result.
+
+        AlphaShop newproduct.report requires productKeyword to be one of the
+        exact keywords returned in keyword.search's `keyword` field.
+        """
+        value = item.get("keyword")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        return None
 
     def _extract_opp_score(self, item: dict) -> Optional[float]:
         """Extract opportunity score from AlphaShop result."""

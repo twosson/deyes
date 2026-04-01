@@ -23,6 +23,34 @@ from app.services.seed_pool_builder import Seed, SeedPoolBuilderService
 logger = get_logger(__name__)
 
 
+def map_business_platform_to_alphashop(business_platform: Optional[str]) -> str:
+    """Map business platform to AlphaShop-supported platform.
+
+    AlphaShop keyword.search and newproduct.report only support:
+    - amazon
+    - tiktok
+
+    This function maps all business platforms to one of these two.
+    """
+    if not business_platform:
+        return "amazon"
+
+    platform_lower = business_platform.lower().strip()
+
+    # Direct mapping
+    if platform_lower in ("amazon", "tiktok"):
+        return platform_lower
+
+    # TikTok family
+    if platform_lower in ("tiktok_shop",):
+        return "tiktok"
+
+    # Everything else defaults to amazon
+    # (temu, alibaba_1688, aliexpress, ozon, mercado_libre, rakuten, etc.)
+    return "amazon"
+
+
+
 @dataclass
 class DemandDiscoveryKeyword:
     """A keyword with its demand validation result."""
@@ -111,7 +139,9 @@ class DemandDiscoveryService:
     ) -> DemandDiscoveryResult:
         """Discover and validate keywords for product selection."""
         normalized_region = region or self.settings.keyword_generation_region or "US"
-        normalized_platform = platform or self.settings.keyword_generation_platform
+        normalized_platform = map_business_platform_to_alphashop(
+            platform or self.settings.keyword_generation_platform
+        )
         normalized_keywords = self._normalize_keywords(keywords)
 
         self.logger.info(
@@ -319,7 +349,9 @@ class DemandDiscoveryService:
         valid_keyword_results = await self.keyword_legitimizer.legitimize_seeds(
             seeds=seeds,
             region=region,
-            platform=platform or self.settings.keyword_generation_platform,
+            platform=map_business_platform_to_alphashop(
+                platform or self.settings.keyword_generation_platform
+            ),
         )
         valid_keyword_payload = [item.to_dict() for item in valid_keyword_results]
         mapping_payload = [

@@ -146,10 +146,12 @@ class ProductSelectorAgent(BaseAgent):
                             valid_keyword_objects.append(valid_kw)
 
                         if valid_keyword_objects:
+                            from app.services.demand_discovery_service import map_business_platform_to_alphashop
+
                             opportunities = await self.opportunity_discovery_service.discover_opportunities(
                                 valid_keywords=valid_keyword_objects,
                                 region=region or "US",
-                                platform=platform.value,
+                                platform=map_business_platform_to_alphashop(platform.value),
                                 max_reports=3,
                                 report_size=5,
                             )

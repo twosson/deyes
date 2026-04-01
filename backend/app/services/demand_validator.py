@@ -18,7 +18,10 @@ import json
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from app.services.keyword_legitimizer import ValidKeyword
 
 from app.clients.alphashop import AlphaShopClient
 from app.clients.redis import RedisClient
@@ -653,7 +656,7 @@ class DemandValidator:
             )
             return None, None, TrendDirection.UNKNOWN
 
-        best_match = keyword_list[0]
+        best_match = self._select_best_keyword_match(keyword_list, keyword)
         search_volume = self._extract_search_volume_from_alphashop(best_match)
         trend_growth_rate, trend_direction = self._extract_trend_from_alphashop(best_match)
 
@@ -668,6 +671,43 @@ class DemandValidator:
 
         return search_volume, trend_growth_rate, trend_direction
 
+    def _select_best_keyword_match(self, keyword_list: list[dict], query: str) -> dict:
+        """Select the best AlphaShop keyword result for a query.
+
+        Prefer exact match, then singular/plural normalized match, then substring match,
+        then fall back to the first result.
+        """
+        normalized_query = query.lower().strip()
+
+        def normalize(value: str) -> str:
+            value = value.lower().strip()
+            if value.endswith("es"):
+                return value[:-2]
+            if value.endswith("s"):
+                return value[:-1]
+            return value
+
+        normalized_query_simple = normalize(normalized_query)
+
+        for item in keyword_list:
+            keyword = item.get("keyword")
+            if isinstance(keyword, str) and keyword.lower().strip() == normalized_query:
+                return item
+
+        for item in keyword_list:
+            keyword = item.get("keyword")
+            if isinstance(keyword, str) and normalize(keyword) == normalized_query_simple:
+                return item
+
+        for item in keyword_list:
+            keyword = item.get("keyword")
+            if isinstance(keyword, str):
+                keyword_norm = keyword.lower().strip()
+                if normalized_query in keyword_norm or keyword_norm in normalized_query:
+                    return item
+
+        return keyword_list[0]
+
     def _extract_search_volume_from_alphashop(self, item: dict) -> int:
         """Extract search volume from AlphaShop keyword result."""
         direct_volume = self._coerce_int(item.get("searchVolume"))
@@ -679,13 +719,24 @@ class DemandValidator:
         if sales_volume is not None:
             return max(sales_volume, 100)
 
-        sold_cnt_30d = self._coerce_int(item.get("soldCnt30d"))
-        if sold_cnt_30d is None:
-            sold_cnt_30d = self._coerce_int(sales_info.get("soldCnt30d"))
-        if sold_cnt_30d is not None:
-            return max(sold_cnt_30d * 10, 100)
+        sold_cnt_30d_obj = sales_info.get("soldCnt30d")
+        if isinstance(sold_cnt_30d_obj, dict):
+            sold_cnt_30d_str = sold_cnt_30d_obj.get("value")
+            sold_cnt_30d = self._parse_chinese_number(sold_cnt_30d_str)
+            if sold_cnt_30d is not None:
+                return max(sold_cnt_30d * 10, 100)
+        else:
+            sold_cnt_30d = self._coerce_int(item.get("soldCnt30d"))
+            if sold_cnt_30d is None:
+                sold_cnt_30d = self._coerce_int(sales_info.get("soldCnt30d"))
+            if sold_cnt_30d is not None:
+                return max(sold_cnt_30d * 10, 100)
 
-        search_rank = self._coerce_int(item.get("searchRank"))
+        demand_info = item.get("demandInfo") if isinstance(item.get("demandInfo"), dict) else {}
+        search_rank_str = demand_info.get("searchRank")
+        search_rank = self._parse_chinese_number(search_rank_str)
+        if search_rank is None:
+            search_rank = self._coerce_int(item.get("searchRank"))
         if search_rank is not None:
             if search_rank <= 1000:
                 return 10000
@@ -695,7 +746,7 @@ class DemandValidator:
                 return 2000
             return 500
 
-        opp_score = self._coerce_int(item.get("oppScore"))
+        opp_score = self._coerce_float(item.get("oppScore"))
         if opp_score is not None:
             return self._estimate_search_volume_from_interest(float(opp_score))
 
@@ -703,7 +754,22 @@ class DemandValidator:
 
     def _extract_trend_from_alphashop(self, item: dict) -> tuple[Optional[Decimal], TrendDirection]:
         """Extract trend growth rate and direction from AlphaShop keyword result."""
-        rank_trends = self._extract_rank_trends(item)
+        sold_cnt_30d_obj = (item.get("salesInfo") or {}).get("soldCnt30d") if isinstance(item.get("salesInfo"), dict) else None
+        if isinstance(sold_cnt_30d_obj, dict):
+            growth_rate_obj = sold_cnt_30d_obj.get("growthRate")
+            if isinstance(growth_rate_obj, dict):
+                growth_rate_str = growth_rate_obj.get("value")
+                growth_rate = self._parse_percentage(growth_rate_str)
+                direction_raw = (growth_rate_obj.get("direction") or "").upper()
+                if growth_rate is not None:
+                    if direction_raw == "UP":
+                        return growth_rate, TrendDirection.RISING
+                    if direction_raw == "DOWN":
+                        return -growth_rate, TrendDirection.DECLINING
+                    return growth_rate, self._classify_trend_direction(growth_rate)
+
+        demand_info = item.get("demandInfo") if isinstance(item.get("demandInfo"), dict) else {}
+        rank_trends = self._extract_rank_trends(demand_info)
         if len(rank_trends) >= 2:
             first_half = rank_trends[: len(rank_trends) // 2]
             second_half = rank_trends[len(rank_trends) // 2 :]
@@ -721,7 +787,7 @@ class DemandValidator:
             direction = self._classify_trend_direction(growth_rate)
             return growth_rate, direction
 
-        opp_score = self._coerce_int(item.get("oppScore"))
+        opp_score = self._coerce_float(item.get("oppScore"))
         if opp_score is not None:
             if opp_score >= 70:
                 return Decimal("0.25"), TrendDirection.RISING
@@ -747,7 +813,7 @@ class DemandValidator:
                 except Exception:
                     continue
             elif isinstance(entry, dict):
-                for key in ("rank", "value", "searchRank"):
+                for key in ("y", "rank", "value", "searchRank"):
                     candidate = self._coerce_int(entry.get(key))
                     if candidate is not None:
                         values.append(candidate)
@@ -1097,22 +1163,15 @@ class DemandValidator:
                 keyword_list = response.get("keyword_list") or []
                 if keyword_list:
                     first_item = keyword_list[0]
-                    search_rank = self._coerce_int(first_item.get("searchRank"))
-                    opp_score = self._coerce_int(first_item.get("oppScore"))
+                    opp_score = self._coerce_float(first_item.get("oppScore"))
 
-                    if search_rank is not None:
-                        if search_rank <= 1000:
-                            return CompetitionDensity.HIGH
-                        if search_rank <= 10000:
-                            return CompetitionDensity.MEDIUM
-                        return CompetitionDensity.LOW
-
+                    # Use oppScore as primary competition signal (higher oppScore = lower competition)
                     if opp_score is not None:
-                        if opp_score >= 80:
-                            return CompetitionDensity.HIGH
-                        if opp_score >= 50:
+                        if opp_score >= 70:
+                            return CompetitionDensity.LOW  # High opportunity = low competition
+                        if opp_score >= 40:
                             return CompetitionDensity.MEDIUM
-                        return CompetitionDensity.LOW
+                        return CompetitionDensity.HIGH  # Low opportunity = high competition
             except Exception as exc:
                 logger.debug(
                     "alphashop_competition_assessment_failed",
@@ -1299,6 +1358,68 @@ class DemandValidator:
                 return None
         return None
 
+    def _coerce_float(self, value) -> float | None:
+        """Convert value to float when possible."""
+        if value is None or value == "":
+            return None
+        if isinstance(value, bool):
+            return float(value)
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            try:
+                return float(value)
+            except Exception:
+                return None
+        return None
+
+    def _parse_chinese_number(self, value) -> int | None:
+        """Parse Chinese-formatted numbers like '13.9w+', '# 99.6w+', '837.8w+'.
+
+        AlphaShop returns numbers in Chinese format:
+        - w (万) = 10,000
+        - k (千) = 1,000
+        - '+' suffix indicates approximate/minimum
+        - '#' prefix is stripped
+        """
+        if not isinstance(value, str):
+            return None
+
+        # Strip whitespace and '#' prefix
+        value = value.strip().lstrip('#').strip()
+        if not value:
+            return None
+
+        # Remove '+' suffix
+        value = value.rstrip('+')
+
+        # Parse multiplier
+        multiplier = 1
+        if value.endswith('w') or value.endswith('W') or value.endswith('万'):
+            multiplier = 10000
+            value = value.rstrip('wW万')
+        elif value.endswith('k') or value.endswith('K') or value.endswith('千'):
+            multiplier = 1000
+            value = value.rstrip('kK千')
+
+        # Parse numeric part
+        try:
+            numeric = float(value)
+            return int(numeric * multiplier)
+        except Exception:
+            return None
+
+    def _parse_percentage(self, value) -> Decimal | None:
+        """Parse percentage strings like '20.0%', '4.0%' to Decimal."""
+        if not isinstance(value, str):
+            return None
+
+        value = value.strip().rstrip('%')
+        try:
+            return Decimal(value) / Decimal("100")
+        except Exception:
+            return None
+
     async def validate_batch(
         self,
         keywords: list[str],
@@ -1335,4 +1456,75 @@ class DemandValidator:
             failed=len(keywords) - passed_count,
         )
 
+        return results
+
+    async def validate_legitimized_batch(
+        self,
+        valid_keywords: list["ValidKeyword"],
+        category: Optional[str] = None,
+        region: Optional[str] = "US",
+        platform: Optional[str] = None,
+    ) -> list[DemandValidationResult]:
+        """Validate already-legitimized keywords without re-running AlphaShop discovery.
+
+        This path is used by the opportunity-first discovery facade after seed -> valid keyword
+        legitimization. It reuses AlphaShop-derived metrics already present on the valid keyword
+        objects and only falls back to provider lookup when needed.
+        """
+        results: list[DemandValidationResult] = []
+        for valid_keyword in valid_keywords:
+            search_volume = valid_keyword.search_volume
+            if search_volume is None:
+                search_volume, trend_growth_rate, trend_direction = await self._get_search_trends(
+                    keyword=valid_keyword.matched_keyword,
+                    region=region or "US",
+                )
+            else:
+                opp_score = valid_keyword.opp_score or 0.0
+                if opp_score >= 70:
+                    trend_growth_rate = Decimal("0.25")
+                    trend_direction = TrendDirection.RISING
+                elif opp_score >= 40:
+                    trend_growth_rate = Decimal("0.05")
+                    trend_direction = TrendDirection.STABLE
+                else:
+                    trend_growth_rate = Decimal("-0.10")
+                    trend_direction = TrendDirection.DECLINING
+
+            competition_value = (valid_keyword.competition_density or "unknown").lower()
+            competition_map = {
+                "low": CompetitionDensity.LOW,
+                "medium": CompetitionDensity.MEDIUM,
+                "high": CompetitionDensity.HIGH,
+                "unknown": CompetitionDensity.UNKNOWN,
+            }
+            competition_density = competition_map.get(competition_value, CompetitionDensity.UNKNOWN)
+            if competition_density == CompetitionDensity.UNKNOWN:
+                competition_density = await self._assess_competition_density(
+                    keyword=valid_keyword.matched_keyword,
+                    region=region or "US",
+                )
+
+            result = DemandValidationResult(
+                keyword=valid_keyword.matched_keyword,
+                search_volume=search_volume,
+                competition_density=competition_density,
+                trend_direction=trend_direction,
+                trend_growth_rate=trend_growth_rate,
+                hot_sell_rank=None,
+                repurchase_rate=None,
+                lead_time_days=None,
+                region=region,
+                category=category,
+                platform=platform,
+            )
+            results.append(result)
+
+        passed_count = sum(1 for r in results if r.passed)
+        logger.info(
+            "demand_validation_legitimized_batch_completed",
+            total=len(valid_keywords),
+            passed=passed_count,
+            failed=len(valid_keywords) - passed_count,
+        )
         return results

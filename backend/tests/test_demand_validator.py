@@ -459,13 +459,15 @@ class TestDemandValidatorAlphaShop:
         assert validator._extract_search_volume_from_alphashop({"searchRank": 800}) == 10000
         assert validator._extract_search_volume_from_alphashop({"searchRank": 7000}) == 2000
         assert validator._extract_search_volume_from_alphashop({"oppScore": 60}) == 5000
+        assert validator._extract_search_volume_from_alphashop({"salesInfo": {"soldCnt30d": {"value": "13.9w+"}}}) == 1390000
+        assert validator._extract_search_volume_from_alphashop({"demandInfo": {"searchRank": "# 99.6w+"}}) == 500
 
     def test_extract_trend_from_alphashop_rank_trends(self):
         """Test AlphaShop trend extraction from rank trends."""
         validator = DemandValidator()
 
         growth_rate, direction = validator._extract_trend_from_alphashop(
-            {"rankTrends": [100, 80, 50, 40]}
+            {"demandInfo": {"rankTrends": [{"y": 100}, {"y": 80}, {"y": 50}, {"y": 40}]}}
         )
 
         assert growth_rate == Decimal("0.5")
@@ -487,15 +489,36 @@ class TestDemandValidatorAlphaShop:
         assert growth_rate == Decimal("-0.10")
         assert direction == TrendDirection.DECLINING
 
+    def test_extract_trend_from_alphashop_prefers_growth_rate(self):
+        """Test AlphaShop trend extraction prefers explicit growthRate over rank trends."""
+        validator = DemandValidator()
+
+        growth_rate, direction = validator._extract_trend_from_alphashop(
+            {
+                "demandInfo": {"rankTrends": [{"y": 560}, {"y": 536}, {"y": 611}, {"y": 958}]},
+                "salesInfo": {
+                    "soldCnt30d": {
+                        "growthRate": {
+                            "value": "5.0%",
+                            "direction": "UP",
+                        }
+                    }
+                },
+            }
+        )
+
+        assert growth_rate == Decimal("0.05")
+        assert direction == TrendDirection.RISING
+
     def test_extract_rank_trends(self):
         """Test AlphaShop rank trend extraction helper."""
         validator = DemandValidator()
 
         result = validator._extract_rank_trends(
-            {"rankTrends": [100, "200", {"rank": 300}, {"value": 400}, {"searchRank": 500}, "bad"]}
+            {"rankTrends": [100, "200", {"rank": 300}, {"value": 400}, {"searchRank": 500}, {"y": 600}, "bad"]}
         )
 
-        assert result == [100, 200, 300, 400, 500]
+        assert result == [100, 200, 300, 400, 500, 600]
 
     @pytest.mark.asyncio
     async def test_get_trends_from_alphashop(self):
@@ -515,6 +538,36 @@ class TestDemandValidatorAlphaShop:
 
         volume, growth_rate, direction = await validator._get_trends_from_alphashop(
             keyword="phone case",
+            region="US",
+        )
+
+        assert volume == 3200
+        assert growth_rate == Decimal("0.5")
+        assert direction == TrendDirection.RISING
+
+    @pytest.mark.asyncio
+    async def test_get_trends_from_alphashop_prefers_exact_match(self):
+        """Test AlphaShop trend lookup prefers exact keyword match over first result."""
+        mock_client = AsyncMock()
+        mock_client.search_keywords.return_value = {
+            "keyword_list": [
+                {
+                    "keyword": "wireless electronics",
+                    "searchVolume": 9999,
+                    "rankTrends": [500, 500, 500, 500],
+                },
+                {
+                    "keyword": "wireless earbuds",
+                    "searchVolume": 3200,
+                    "rankTrends": [100, 80, 50, 40],
+                },
+            ]
+        }
+
+        validator = DemandValidator(alphashop_client=mock_client)
+
+        volume, growth_rate, direction = await validator._get_trends_from_alphashop(
+            keyword="wireless earbuds",
             region="US",
         )
 
@@ -630,7 +683,7 @@ class TestDemandValidatorAlphaShop:
         """Test competition density uses AlphaShop search rank when available."""
         mock_client = AsyncMock()
         mock_client.search_keywords.return_value = {
-            "keyword_list": [{"searchRank": 500}]
+            "keyword_list": [{"demandInfo": {"searchRank": "# 500+"}}]
         }
         validator = DemandValidator(alphashop_client=mock_client)
 

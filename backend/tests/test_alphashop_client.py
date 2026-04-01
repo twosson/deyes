@@ -121,9 +121,10 @@ class TestAlphaShopClient:
         assert len(result["keyword_list"]) == 2
         assert result["keyword_list"][0]["keyword"] == "wireless earbuds"
 
+
     @pytest.mark.asyncio
-    async def test_intelligent_supplier_selection_success(self):
-        """Test successful supplier selection."""
+    async def test_newproduct_report_success(self):
+        """Test successful newproduct.report normalization."""
         client = AlphaShopClient(
             access_key="test_key",
             secret_key="test_secret",
@@ -131,39 +132,38 @@ class TestAlphaShopClient:
 
         mock_response = {
             "resultCode": "SUCCESS",
-            "requestId": "req-123",
-            "result": {
-                "result": {
-                    "realIntention": "phone case",
-                    "offerInfo": {
-                        "offerList": [
-                            {
-                                "itemId": "123456789",
-                                "title": "Phone Case",
-                                "itemPrice": {"price": 25.0},
-                                "imageUrl": "https://example.com/img.jpg",
-                            }
-                        ]
-                    },
-                }
+            "requestId": "req-789",
+            "model": {
+                "productList": [
+                    {
+                        "productId": "p1",
+                        "title": "Trending Phone Stand",
+                    }
+                ],
+                "keywordSummary": {
+                    "summary": "Rising demand with moderate competition",
+                    "opportunityScore": 82,
+                },
             },
         }
 
         with patch.object(client, "_request", new_callable=AsyncMock) as mock_request:
             mock_request.return_value = mock_response
 
-            result = await client.intelligent_supplier_selection(
-                intention="phone case",
-                query="protective phone case",
+            result = await client.newproduct_report(
+                platform="amazon",
+                region="US",
+                product_keyword="phone stand",
+                listing_time="180",
+                size=10,
             )
 
-        assert result["real_intention"] == "phone case"
-        assert "offer_info" in result
-        assert len(result["offer_info"].get("offerList", [])) == 1
-        assert result["offer_info"]["offerList"][0]["itemId"] == "123456789"
+        assert result["request_id"] == "req-789"
+        assert len(result["product_list"]) == 1
+        assert result["items"] == result["product_list"]
+        assert result["product_list"][0]["title"] == "Trending Phone Stand"
+        assert result["keyword_summary"]["opportunityScore"] == 82
 
-    @pytest.mark.asyncio
-    async def test_search_supplier_info_success(self):
         """Test successful supplier info search."""
         client = AlphaShopClient(
             access_key="test_key",
@@ -326,9 +326,11 @@ class TestAlphaShopClient:
 
         response = {
             "result": {
-                "data": [
-                    {"keyword": "usb cable", "searchRank": 1000},
-                ]
+                "data": {
+                    "keywordList": [
+                        {"keyword": "usb cable", "searchRank": "# 1000+"},
+                    ]
+                }
             }
         }
 

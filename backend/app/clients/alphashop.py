@@ -28,6 +28,7 @@ class AlphaShopClient:
     """Client for AlphaShop APIs."""
 
     KEYWORD_SEARCH_ENDPOINT = "/opp.selection.keyword.search/1.0"
+    NEWPRODUCT_REPORT_ENDPOINT = "/opp.selection.newproduct.report/1.0"
     INTELLIGENT_SUPPLIER_SELECTION_ENDPOINT = "/ai.select.provider.search/1.0"
     SUPPLIER_INFO_SEARCH_ENDPOINT = "/inquiry.supplier.query/1.0"
     BATCH_INQUIRY_SUBMIT_ENDPOINT = "/inquiry.task.submit.batchItem/1.0"
@@ -107,6 +108,36 @@ class AlphaShopClient:
         )
         return {
             "keyword_list": self._extract_keyword_list(response),
+            "request_id": response.get("requestId"),
+            "raw": response,
+        }
+
+    async def newproduct_report(
+        self,
+        *,
+        platform: str,
+        region: str,
+        product_keyword: str,
+        listing_time: str = "180",
+        size: int | None = None,
+    ) -> dict[str, Any]:
+        """Call AlphaShop new product report API for a validated keyword."""
+        payload: dict[str, Any] = {
+            "platform": platform,
+            "region": region,
+            "productKeyword": product_keyword,
+            "listingTime": listing_time,
+        }
+        if size is not None:
+            payload["size"] = size
+
+        response = await self._request(self.NEWPRODUCT_REPORT_ENDPOINT, payload)
+        product_list = self._extract_newproduct_list(response)
+        keyword_summary = self._extract_newproduct_keyword_summary(response)
+        return {
+            "items": product_list,
+            "product_list": product_list,
+            "keyword_summary": keyword_summary,
             "request_id": response.get("requestId"),
             "raw": response,
         }
@@ -298,7 +329,24 @@ class AlphaShopClient:
         )
 
     def _extract_keyword_list(self, response: dict[str, Any]) -> list[dict[str, Any]]:
-        """Extract keyword list from AlphaShop keyword response variants."""
+        """Extract keyword list from AlphaShop keyword response variants.
+
+        AlphaShop returns keywords in nested structure:
+        response["result"]["data"]["keywordList"]
+        """
+        # Try result.data.keywordList (actual AlphaShop structure)
+        result = response.get("result")
+        if isinstance(result, dict):
+            nested_data = result.get("data")
+            if isinstance(nested_data, dict):
+                keyword_list = nested_data.get("keywordList")
+                if isinstance(keyword_list, list):
+                    return [item for item in keyword_list if isinstance(item, dict)]
+            # Try result.data as list
+            if isinstance(nested_data, list):
+                return [item for item in nested_data if isinstance(item, dict)]
+
+        # Try model (legacy variant)
         model = response.get("model")
         if isinstance(model, list):
             return [item for item in model if isinstance(item, dict)]
@@ -307,14 +355,53 @@ class AlphaShopClient:
             if isinstance(keyword_list, list):
                 return [item for item in keyword_list if isinstance(item, dict)]
 
+        # Try data as list (legacy variant)
         data = response.get("data")
         if isinstance(data, list):
             return [item for item in data if isinstance(item, dict)]
 
+        return []
+
+    def _extract_newproduct_list(self, response: dict[str, Any]) -> list[dict[str, Any]]:
+        """Extract product list from AlphaShop newproduct report response variants."""
         result = response.get("result")
         if isinstance(result, dict):
             nested_data = result.get("data")
+            if isinstance(nested_data, dict):
+                product_list = nested_data.get("productList")
+                if isinstance(product_list, list):
+                    return [item for item in product_list if isinstance(item, dict)]
             if isinstance(nested_data, list):
                 return [item for item in nested_data if isinstance(item, dict)]
 
+        model = response.get("model")
+        if isinstance(model, list):
+            return [item for item in model if isinstance(item, dict)]
+        if isinstance(model, dict):
+            product_list = model.get("productList")
+            if isinstance(product_list, list):
+                return [item for item in product_list if isinstance(item, dict)]
+
+        data = response.get("data")
+        if isinstance(data, list):
+            return [item for item in data if isinstance(item, dict)]
+
         return []
+
+    def _extract_newproduct_keyword_summary(self, response: dict[str, Any]) -> dict[str, Any]:
+        """Extract keyword summary from AlphaShop newproduct report response."""
+        result = response.get("result")
+        if isinstance(result, dict):
+            nested_data = result.get("data")
+            if isinstance(nested_data, dict):
+                keyword_summary = nested_data.get("keywordSummary")
+                if isinstance(keyword_summary, dict):
+                    return keyword_summary
+
+        model = response.get("model")
+        if isinstance(model, dict):
+            keyword_summary = model.get("keywordSummary")
+            if isinstance(keyword_summary, dict):
+                return keyword_summary
+
+        return {}

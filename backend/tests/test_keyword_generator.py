@@ -98,6 +98,8 @@ class TestKeywordGenerator:
         assert generator._extract_search_volume_from_alphashop({"searchRank": 800}) == 10000
         assert generator._extract_search_volume_from_alphashop({"searchRank": 7000}) == 2000
         assert generator._extract_search_volume_from_alphashop({"oppScore": 60}) == 5000
+        assert generator._extract_search_volume_from_alphashop({"salesInfo": {"soldCnt30d": {"value": "13.9w+"}}}) == 1390000
+        assert generator._extract_search_volume_from_alphashop({"demandInfo": {"searchRank": "# 99.6w+"}}) == 500
 
     def test_extract_trend_score_from_alphashop(self):
         """Test AlphaShop trend score mapping."""
@@ -107,17 +109,20 @@ class TestKeywordGenerator:
         assert generator._extract_trend_score_from_alphashop({"searchRank": 50}) == 90
         assert generator._extract_trend_score_from_alphashop({"searchRank": 1500}) == 60
         assert generator._extract_trend_score_from_alphashop({}) == 20
+        assert generator._extract_trend_score_from_alphashop({"oppScore": "37.7"}) == 37
+        assert generator._extract_trend_score_from_alphashop({"demandInfo": {"searchRank": "# 99.6w+"}}) == 20
+        assert generator._extract_trend_score_from_alphashop({"demandInfo": {"rankTrends": [{"y": 100}, {"y": 200}]}}) == 90
 
     def test_extract_competition_density_from_alphashop(self):
         """Test AlphaShop competition density mapping."""
         generator = KeywordGenerator()
 
-        assert generator._extract_competition_density_from_alphashop({"searchRank": 500}, "phone case") == "high"
-        assert generator._extract_competition_density_from_alphashop({"searchRank": 5000}, "phone case") == "medium"
-        assert generator._extract_competition_density_from_alphashop({"searchRank": 20000}, "phone case") == "low"
-        assert generator._extract_competition_density_from_alphashop({"oppScore": 85}, "phone case") == "high"
+        assert generator._extract_competition_density_from_alphashop({"oppScore": 85}, "phone case") == "low"
         assert generator._extract_competition_density_from_alphashop({"oppScore": 65}, "phone case") == "medium"
-        assert generator._extract_competition_density_from_alphashop({"oppScore": 30}, "phone case") == "low"
+        assert generator._extract_competition_density_from_alphashop({"oppScore": 30}, "phone case") == "high"
+        # Falls back to heuristic when oppScore is unavailable
+        assert generator._extract_competition_density_from_alphashop({"demandInfo": {"searchRank": "# 500+"}}, "phone case") == "high"
+        assert generator._extract_competition_density_from_alphashop({"demandInfo": {"searchRank": "# 5000+"}}, "wireless phone charger") == "medium"
 
     def test_extract_keyword_text(self):
         """Test keyword text extraction from AlphaShop variants."""
@@ -126,6 +131,7 @@ class TestKeywordGenerator:
         assert generator._extract_keyword_text({"keyword": "phone case"}) == "phone case"
         assert generator._extract_keyword_text({"query": "laptop stand"}) == "laptop stand"
         assert generator._extract_keyword_text({"title": "usb cable"}) == "usb cable"
+        assert generator._extract_keyword_text({"keywordCn": "家用电器", "keyword": "home electronics"}) == "home electronics"
         assert generator._extract_keyword_text({"radar": {"keyword": "wireless earbuds"}}) == "wireless earbuds"
         assert generator._extract_keyword_text({"unknown": "value"}) is None
 
@@ -158,12 +164,12 @@ class TestKeywordGenerator:
         generator = KeywordGenerator()
 
         item = {
-            "rankTrends": [100, "200", {"rank": 300}, {"value": 400}, {"searchRank": 500}, "bad"]
+            "rankTrends": [100, "200", {"rank": 300}, {"value": 400}, {"searchRank": 500}, {"y": 600}, "bad"]
         }
 
         result = generator._extract_rank_trends(item)
 
-        assert result == [100, 200, 300, 400, 500]
+        assert result == [100, 200, 300, 400, 500, 600]
 
     def test_heuristic_competition_assessment_generic(self):
         """Test heuristic competition for generic keywords."""
@@ -208,7 +214,9 @@ class TestKeywordGenerator:
 
         assert generator._is_category_relevant("wireless headphones", "electronics") is True
         assert generator._is_category_relevant("bluetooth speaker", "electronics") is True
-        assert generator._is_category_relevant("summer dress", "electronics") is True
+        assert generator._is_category_relevant("summer dress", "electronics") is False
+        assert generator._is_category_relevant("wireless electronics", "electronics") is False
+        assert generator._is_category_relevant("home electronics", "electronics") is False
 
     def test_is_category_relevant_fashion(self):
         """Test category relevance for fashion."""
@@ -217,6 +225,7 @@ class TestKeywordGenerator:
         assert generator._is_category_relevant("summer dress", "fashion") is True
         assert generator._is_category_relevant("running shoes", "fashion") is True
         assert generator._is_category_relevant("leather bag", "fashion") is True
+        assert generator._is_category_relevant("wireless earbuds", "fashion") is False
 
     @pytest.mark.asyncio
     async def test_generate_trending_keywords_with_alphashop(self):
@@ -253,8 +262,8 @@ class TestKeywordGenerator:
         # Sorted by trend_score descending
         assert results[0].keyword == "phone case"
         assert results[1].keyword == "wireless earbuds"
-        assert results[0].competition_density == "high"
-        assert results[1].competition_density == "medium"
+        assert results[0].competition_density == "low"
+        assert results[1].competition_density == "low"
 
     @pytest.mark.asyncio
     async def test_generate_trending_keywords_filters_low_trend_scores(self):

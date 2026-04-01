@@ -424,13 +424,26 @@ class KeywordGenerator:
         if sales_volume is not None:
             return max(sales_volume, 100)
 
-        sold_cnt_30d = self._coerce_int(item.get("soldCnt30d"))
-        if sold_cnt_30d is None:
-            sold_cnt_30d = self._coerce_int(sales_info.get("soldCnt30d"))
-        if sold_cnt_30d is not None:
-            return max(sold_cnt_30d * 10, 100)
+        # AlphaShop returns soldCnt30d as nested object with string value like "13.9w+"
+        sold_cnt_30d_obj = sales_info.get("soldCnt30d")
+        if isinstance(sold_cnt_30d_obj, dict):
+            sold_cnt_30d_str = sold_cnt_30d_obj.get("value")
+            sold_cnt_30d = self._parse_chinese_number(sold_cnt_30d_str)
+            if sold_cnt_30d is not None:
+                return max(sold_cnt_30d * 10, 100)
+        else:
+            sold_cnt_30d = self._coerce_int(item.get("soldCnt30d"))
+            if sold_cnt_30d is None:
+                sold_cnt_30d = self._coerce_int(sales_info.get("soldCnt30d"))
+            if sold_cnt_30d is not None:
+                return max(sold_cnt_30d * 10, 100)
 
-        search_rank = self._coerce_int(item.get("searchRank"))
+        # AlphaShop returns searchRank in demandInfo as string like "# 99.6w+"
+        demand_info = item.get("demandInfo") if isinstance(item.get("demandInfo"), dict) else {}
+        search_rank_str = demand_info.get("searchRank")
+        search_rank = self._parse_chinese_number(search_rank_str)
+        if search_rank is None:
+            search_rank = self._coerce_int(item.get("searchRank"))
         if search_rank is not None:
             if search_rank <= 1000:
                 return 10000
@@ -440,19 +453,21 @@ class KeywordGenerator:
                 return 2000
             return 500
 
-        opp_score = self._coerce_int(item.get("oppScore"))
+        opp_score = self._coerce_float(item.get("oppScore"))
         if opp_score is not None:
-            return self._estimate_search_volume_from_interest(opp_score)
+            return self._estimate_search_volume_from_interest(int(opp_score))
 
         return 100
 
     def _extract_trend_score_from_alphashop(self, item: dict[str, Any]) -> int:
         """Extract a normalized 0-100 trend score from AlphaShop keyword data."""
-        opp_score = self._coerce_int(item.get("oppScore"))
+        opp_score = self._coerce_float(item.get("oppScore"))
         if opp_score is not None:
-            return max(0, min(opp_score, 100))
+            return max(0, min(int(opp_score), 100))
 
-        rank_trends = self._extract_rank_trends(item)
+        # AlphaShop returns rankTrends in demandInfo as array of {x, y} objects
+        demand_info = item.get("demandInfo") if isinstance(item.get("demandInfo"), dict) else {}
+        rank_trends = self._extract_rank_trends(demand_info)
         if rank_trends:
             avg_rank = sum(rank_trends) / len(rank_trends)
             if avg_rank <= 100:
@@ -465,7 +480,11 @@ class KeywordGenerator:
                 return 45
             return 25
 
-        search_rank = self._coerce_int(item.get("searchRank"))
+        # AlphaShop returns searchRank as string like "# 99.6w+"
+        search_rank_str = demand_info.get("searchRank")
+        search_rank = self._parse_chinese_number(search_rank_str)
+        if search_rank is None:
+            search_rank = self._coerce_int(item.get("searchRank"))
         if search_rank is not None:
             if search_rank <= 100:
                 return 90
@@ -480,27 +499,29 @@ class KeywordGenerator:
         return self.min_trend_score
 
     def _extract_competition_density_from_alphashop(self, item: dict[str, Any], keyword: str) -> str:
-        """Map AlphaShop keyword metrics into competition density buckets."""
-        search_rank = self._coerce_int(item.get("searchRank"))
-        if search_rank is not None:
-            if search_rank <= 1000:
-                return "high"
-            if search_rank <= 10000:
-                return "medium"
-            return "low"
+        """Map AlphaShop keyword metrics into competition density buckets.
 
-        opp_score = self._coerce_int(item.get("oppScore"))
+        Note: searchRank is demand rank (lower = more popular), not competition.
+        Use oppScore and keyword specificity for competition assessment.
+        """
+        # Use oppScore as primary competition signal (higher oppScore = lower competition)
+        opp_score = self._coerce_float(item.get("oppScore"))
         if opp_score is not None:
-            if opp_score >= 80:
-                return "high"
-            if opp_score >= 50:
+            if opp_score >= 70:
+                return "low"  # High opportunity = low competition
+            if opp_score >= 40:
                 return "medium"
-            return "low"
+            return "high"  # Low opportunity = high competition
 
+        # Fallback to heuristic based on keyword specificity
         return self._heuristic_competition_assessment(keyword)
 
     def _extract_rank_trends(self, item: dict[str, Any]) -> list[int]:
-        """Extract numeric rank trend points from AlphaShop result variants."""
+        """Extract numeric rank trend points from AlphaShop result variants.
+
+        AlphaShop returns rankTrends as array of objects like:
+        [{"x": "202503", "y": 816350.0, "class": "..."}, ...]
+        """
         raw = item.get("rankTrends")
         if not isinstance(raw, list):
             return []
@@ -515,7 +536,8 @@ class KeywordGenerator:
                 except Exception:
                     continue
             elif isinstance(entry, dict):
-                for key in ("rank", "value", "searchRank"):
+                # AlphaShop uses "y" for rank value
+                for key in ("y", "rank", "value", "searchRank"):
                     candidate = self._coerce_int(entry.get(key))
                     if candidate is not None:
                         values.append(candidate)
@@ -523,9 +545,27 @@ class KeywordGenerator:
         return values
 
     def _is_category_relevant(self, keyword: str, category: str) -> bool:
-        """Check if keyword is relevant to category."""
+        """Check if keyword is relevant to category.
+
+        Filters out generic category-level keywords that won't match specific products.
+        """
         keyword_lower = keyword.lower()
         category_lower = category.lower()
+
+        # Reject generic category-level keywords (e.g., "wireless electronics", "home electronics")
+        generic_patterns = [
+            f"{category_lower}",  # exact category name
+            f"wireless {category_lower}",
+            f"home {category_lower}",
+            f"kitchen {category_lower}",
+            f"vehicle {category_lower}",
+            f"marine {category_lower}",
+            f"{category_lower} tablets",
+            f"{category_lower} accessories",
+        ]
+        for pattern in generic_patterns:
+            if keyword_lower == pattern or keyword_lower.endswith(f" {pattern}"):
+                return False
 
         category_keywords = {
             "electronics": [
@@ -539,6 +579,9 @@ class KeywordGenerator:
                 "camera",
                 "watch",
                 "earbuds",
+                "plug",
+                "bulb",
+                "light",
             ],
             "fashion": [
                 "dress",
@@ -594,7 +637,10 @@ class KeywordGenerator:
             for cat_kw in category_keywords[category_lower]:
                 if cat_kw in keyword_lower:
                     return True
+            # Reject if category is in list but no product-level keyword matched
+            return False
 
+        # For unknown categories, accept (backward compatibility)
         return True
 
     def _estimate_search_volume_from_interest(self, avg_interest: int) -> int:
@@ -748,3 +794,54 @@ class KeywordGenerator:
             except Exception:
                 return None
         return None
+
+    def _coerce_float(self, value: Any) -> float | None:
+        """Convert value to float when possible."""
+        if value is None or value == "":
+            return None
+        if isinstance(value, bool):
+            return float(value)
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            try:
+                return float(value)
+            except Exception:
+                return None
+        return None
+
+    def _parse_chinese_number(self, value: Any) -> int | None:
+        """Parse Chinese-formatted numbers like '13.9w+', '# 99.6w+', '837.8w+'.
+
+        AlphaShop returns numbers in Chinese format:
+        - w (万) = 10,000
+        - k (千) = 1,000
+        - '+' suffix indicates approximate/minimum
+        - '#' prefix is stripped
+        """
+        if not isinstance(value, str):
+            return None
+
+        # Strip whitespace and '#' prefix
+        value = value.strip().lstrip('#').strip()
+        if not value:
+            return None
+
+        # Remove '+' suffix
+        value = value.rstrip('+')
+
+        # Parse multiplier
+        multiplier = 1
+        if value.endswith('w') or value.endswith('W') or value.endswith('万'):
+            multiplier = 10000
+            value = value.rstrip('wW万')
+        elif value.endswith('k') or value.endswith('K') or value.endswith('千'):
+            multiplier = 1000
+            value = value.rstrip('kK千')
+
+        # Parse numeric part
+        try:
+            numeric = float(value)
+            return int(numeric * multiplier)
+        except Exception:
+            return None

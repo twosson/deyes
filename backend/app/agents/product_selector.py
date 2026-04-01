@@ -10,6 +10,7 @@ from app.core.seasonal_calendar import get_seasonal_calendar
 from app.db.models import CandidateProduct, SupplierMatch
 from app.services.demand_discovery_service import DemandDiscoveryService
 from app.services.demand_validator import DemandValidator
+from app.services.opportunity_discovery_service import OpportunityDiscoveryService
 from app.services.product_scoring_service import ProductScoreInput, ProductScoringService
 from app.services.source_adapter import MockSourceAdapter, SourceAdapter
 from app.services.supplier_matcher import SupplierMatcherService
@@ -37,6 +38,7 @@ class ProductSelectorAgent(BaseAgent):
         supplier_matcher: Optional[SupplierMatcherService] = None,
         demand_validator: Optional[DemandValidator] = None,
         demand_discovery_service: Optional[DemandDiscoveryService] = None,
+        opportunity_discovery_service: Optional[OpportunityDiscoveryService] = None,
         enable_demand_validation: bool = True,
         enable_seasonal_boost: bool = True,
     ):
@@ -54,6 +56,7 @@ class ProductSelectorAgent(BaseAgent):
         self.demand_discovery_service = demand_discovery_service or DemandDiscoveryService(
             demand_validator=self.demand_validator,
         )
+        self.opportunity_discovery_service = opportunity_discovery_service or OpportunityDiscoveryService()
         self.enable_demand_validation = enable_demand_validation
         self.enable_seasonal_boost = enable_seasonal_boost
         self.require_demand_discovery = (
@@ -78,6 +81,7 @@ class ProductSelectorAgent(BaseAgent):
             validation_results = []
             validated_keywords = keywords
             skipped_reason = None
+            opportunities = []
 
             # Demand-first keyword discovery
             if self.require_demand_discovery:
@@ -109,6 +113,67 @@ class ProductSelectorAgent(BaseAgent):
                     degraded=discovery_result.degraded,
                 )
 
+                # Opportunity discovery (Phase 1: metadata enrichment only)
+                if validated_keywords and discovery_result.valid_keywords:
+                    try:
+                        from app.services.keyword_legitimizer import ValidKeyword
+                        from app.services.seed_pool_builder import Seed
+
+                        # Reconstruct ValidKeyword objects from metadata
+                        valid_keyword_objects: list[ValidKeyword] = []
+                        for vk_dict in discovery_result.valid_keywords:
+                            if not vk_dict.get("is_valid_for_report"):
+                                continue
+                            seed_dict = vk_dict.get("seed") or {}
+                            seed = Seed(
+                                term=seed_dict.get("term", ""),
+                                source=seed_dict.get("source", "unknown"),
+                                confidence=seed_dict.get("confidence", 0.0),
+                                category=seed_dict.get("category"),
+                                region=seed_dict.get("region"),
+                                platform=seed_dict.get("platform"),
+                            )
+                            valid_kw = ValidKeyword(
+                                seed=seed,
+                                matched_keyword=vk_dict.get("matched_keyword", ""),
+                                match_type=vk_dict.get("match_type", "unknown"),
+                                opp_score=vk_dict.get("opp_score"),
+                                search_volume=vk_dict.get("search_volume"),
+                                competition_density=vk_dict.get("competition_density", "unknown"),
+                                is_valid_for_report=vk_dict.get("is_valid_for_report", False),
+                                raw=vk_dict.get("raw", {}),
+                            )
+                            valid_keyword_objects.append(valid_kw)
+
+                        if valid_keyword_objects:
+                            opportunities = await self.opportunity_discovery_service.discover_opportunities(
+                                valid_keywords=valid_keyword_objects,
+                                region=region or "US",
+                                platform=platform.value,
+                                max_reports=3,
+                                report_size=5,
+                            )
+                            self.logger.info(
+                                "opportunity_discovery_integration_completed",
+                                strategy_run_id=str(context.strategy_run_id),
+                                opportunities_found=len(opportunities),
+                                valid_keywords_input=len(valid_keyword_objects),
+                                discovery_success_rate=round(len(opportunities) / len(valid_keyword_objects), 3) if valid_keyword_objects else 0.0,
+                            )
+                        else:
+                            self.logger.info(
+                                "opportunity_discovery_skipped",
+                                strategy_run_id=str(context.strategy_run_id),
+                                reason="no_report_safe_keywords",
+                            )
+                    except Exception as exc:
+                        self.logger.warning(
+                            "opportunity_discovery_integration_failed",
+                            strategy_run_id=str(context.strategy_run_id),
+                            error=str(exc),
+                            error_type=type(exc).__name__,
+                        )
+
                 if not validated_keywords:
                     self.logger.warning(
                         "no_validated_keywords_available",
@@ -130,9 +195,15 @@ class ProductSelectorAgent(BaseAgent):
                         candidate_count_per_discovery_mode=0,
                         validated_keywords_count=len(discovery_result.validated_keywords),
                     )
-                    raise RuntimeError(
-                        "No validated keywords available for product selection"
-                    )
+                    skipped_reason = "no_validated_keywords_available"
+                    output_data = {
+                        "candidate_ids": [],
+                        "count": 0,
+                        "skipped_reason": skipped_reason,
+                    }
+                    if demand_discovery_payload is not None:
+                        output_data["demand_discovery"] = demand_discovery_payload
+                    return AgentResult(success=True, output_data=output_data)
 
             # Initialize source adapter if not provided
             if not self.source_adapter:
@@ -201,6 +272,9 @@ class ProductSelectorAgent(BaseAgent):
                 )
 
             candidate_ids = []
+            opportunity_map = {
+                opp.keyword.lower(): opp.to_dict() for opp in opportunities if opp.keyword
+            }
 
             # Process each product
             for rank, (product, priority_score) in enumerate(products_with_scores, start=1):
@@ -214,6 +288,17 @@ class ProductSelectorAgent(BaseAgent):
                 normalized_attributes = product.normalized_attributes or {}
                 normalized_attributes["competition_density"] = competition_density
 
+                matched_opportunity = None
+                for keyword, opportunity in opportunity_map.items():
+                    if keyword and keyword in product.title.lower():
+                        matched_opportunity = opportunity
+                        break
+
+                if matched_opportunity:
+                    normalized_attributes["opportunity_keyword"] = matched_opportunity["keyword"]
+                    normalized_attributes["opportunity_score"] = matched_opportunity.get("opportunity_score")
+                    normalized_attributes["opportunity_title"] = matched_opportunity.get("title")
+
                 if self.enable_seasonal_boost:
                     normalized_attributes["seasonal_boost"] = seasonal_boost
                     normalized_attributes["priority_score"] = round(priority_score, 4)
@@ -223,6 +308,10 @@ class ProductSelectorAgent(BaseAgent):
                 demand_metadata = None
                 if demand_discovery_payload:
                     demand_metadata = {**demand_discovery_payload}
+                    if matched_opportunity:
+                        demand_metadata["opportunity"] = matched_opportunity
+                    if opportunities:
+                        demand_metadata["opportunities"] = [opp.to_dict() for opp in opportunities]
                     if skipped_reason:
                         demand_metadata["skipped_reason"] = skipped_reason
 

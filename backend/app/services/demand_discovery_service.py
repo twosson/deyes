@@ -27,27 +27,33 @@ def map_business_platform_to_alphashop(business_platform: Optional[str]) -> str:
     """Map business platform to AlphaShop-supported platform.
 
     AlphaShop keyword.search and newproduct.report only support:
-    - amazon
-    - tiktok
+    - Amazon (capital A)
+    - TikTok (capital T and K)
+
+    Supported regions by platform:
+    - Amazon: US, GB, ES, FR, DE, IT, JP, BR, MX, SG, PH, TH, MY, VN, ID
+    - TikTok: US, GB, ES, FR, DE, IT, JP, BR, MX, SG, PH, TH, MY, VN, ID
 
     This function maps all business platforms to one of these two.
     """
     if not business_platform:
-        return "amazon"
+        return "Amazon"
 
     platform_lower = business_platform.lower().strip()
 
-    # Direct mapping
-    if platform_lower in ("amazon", "tiktok"):
-        return platform_lower
+    # Direct mapping (case-insensitive input, capital output)
+    if platform_lower == "amazon":
+        return "Amazon"
+    if platform_lower == "tiktok":
+        return "TikTok"
 
     # TikTok family
     if platform_lower in ("tiktok_shop",):
-        return "tiktok"
+        return "TikTok"
 
-    # Everything else defaults to amazon
+    # Everything else defaults to Amazon
     # (temu, alibaba_1688, aliexpress, ozon, mercado_libre, rakuten, etc.)
-    return "amazon"
+    return "Amazon"
 
 
 

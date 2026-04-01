@@ -103,7 +103,7 @@ class AlphaShopClient:
         response = await self._request(
             self.KEYWORD_SEARCH_ENDPOINT,
             {
-                "platform": platform,
+                "platform": self._normalize_market_platform(platform),
                 "region": region,
                 "keyword": keyword,
                 "listingTime": listing_time,
@@ -126,7 +126,7 @@ class AlphaShopClient:
     ) -> dict[str, Any]:
         """Call AlphaShop new product report API for a validated keyword."""
         payload: dict[str, Any] = {
-            "platform": platform,
+            "platform": self._normalize_market_platform(platform),
             "region": region,
             "productKeyword": product_keyword,
         }
@@ -292,6 +292,13 @@ class AlphaShopClient:
                 await asyncio.sleep(delay)
 
         raise RuntimeError(f"AlphaShop request failed for {endpoint}: {last_error}")
+
+    def _normalize_market_platform(self, platform: str | None) -> str:
+        """Normalize market discovery platform to AlphaShop's documented values."""
+        normalized = (platform or "").strip().lower()
+        if normalized in {"tiktok", "tiktok_shop"}:
+            return "TikTok"
+        return "Amazon"
 
     def _build_authorization_header(self) -> str:
         """Build Bearer Authorization header value."""

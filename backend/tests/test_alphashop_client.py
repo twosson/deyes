@@ -92,6 +92,33 @@ class TestAlphaShopClient:
         assert result["keyword_list"][0]["searchVolume"] == 5000
 
     @pytest.mark.asyncio
+    async def test_search_keywords_normalizes_platform_for_alphashop(self):
+        """Test keyword.search sends AlphaShop's documented platform casing."""
+        client = AlphaShopClient(
+            access_key="test_key",
+            secret_key="test_secret",
+        )
+
+        with patch.object(client, "_request", new_callable=AsyncMock) as mock_request:
+            mock_request.return_value = {"resultCode": "SUCCESS", "model": []}
+
+            await client.search_keywords(
+                platform="temu",
+                region="US",
+                keyword="phone case",
+                listing_time="180",
+            )
+
+        mock_request.assert_awaited_once_with(
+            client.KEYWORD_SEARCH_ENDPOINT,
+            {
+                "platform": "Amazon",
+                "region": "US",
+                "keyword": "phone case",
+                "listingTime": "180",
+            },
+        )
+    @pytest.mark.asyncio
     async def test_search_keywords_with_data_variant(self):
         """Test keyword search with data-list variant response."""
         client = AlphaShopClient(
@@ -164,7 +191,34 @@ class TestAlphaShopClient:
         assert result["product_list"][0]["title"] == "Trending Phone Stand"
         assert result["keyword_summary"]["opportunityScore"] == 82
 
-        """Test successful supplier info search."""
+    @pytest.mark.asyncio
+    async def test_newproduct_report_normalizes_platform_for_alphashop(self):
+        """Test newproduct.report sends AlphaShop's documented platform casing."""
+        client = AlphaShopClient(
+            access_key="test_key",
+            secret_key="test_secret",
+        )
+
+        with patch.object(client, "_request", new_callable=AsyncMock) as mock_request:
+            mock_request.return_value = {
+                "resultCode": "SUCCESS",
+                "model": {"productList": [], "keywordSummary": {}},
+            }
+
+            await client.newproduct_report(
+                platform="amazon",
+                region="US",
+                product_keyword="phone stand",
+                listing_time="180",
+                size=10,
+            )
+
+        call_args = mock_request.call_args
+        assert call_args[0][1]["platform"] == "Amazon"
+        assert call_args[0][1]["productKeyword"] == "phone stand"
+
+    @pytest.mark.asyncio
+    async def test_search_supplier_info_success(self):
         client = AlphaShopClient(
             access_key="test_key",
             secret_key="test_secret",

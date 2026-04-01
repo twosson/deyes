@@ -121,7 +121,7 @@ class AlphaShopClient:
         platform: str,
         region: str,
         product_keyword: str,
-        listing_time: str = "180",
+        listing_time: str | None = "180",
         size: int | None = None,
     ) -> dict[str, Any]:
         """Call AlphaShop new product report API for a validated keyword."""
@@ -129,8 +129,9 @@ class AlphaShopClient:
             "platform": platform,
             "region": region,
             "productKeyword": product_keyword,
-            "listingTime": listing_time,
         }
+        if listing_time is not None:
+            payload["listingTime"] = listing_time
         if size is not None:
             payload["size"] = size
 

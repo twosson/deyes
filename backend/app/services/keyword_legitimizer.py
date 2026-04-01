@@ -246,7 +246,7 @@ class KeywordLegitimizerService:
         return "fallback"
 
     def _is_too_generic(self, keyword: str) -> bool:
-        """Check if keyword is too generic for newproduct.report."""
+        """Check if keyword is too generic or contains brand terms for newproduct.report."""
         generic_patterns = [
             "electronics",
             "fashion",
@@ -258,8 +258,26 @@ class KeywordLegitimizerService:
             "wireless electronics",
             "home electronics",
         ]
+        brand_keywords = [
+            "iphone",
+            "ipad",
+            "samsung",
+            "nike",
+            "adidas",
+            "apple",
+            "sony",
+            "lg",
+            "dell",
+            "hp",
+        ]
         keyword_lower = keyword.lower().strip()
-        return keyword_lower in generic_patterns
+        if keyword_lower in generic_patterns:
+            return True
+        # Check if keyword contains any brand term
+        for brand in brand_keywords:
+            if brand in keyword_lower:
+                return True
+        return False
 
     def _extract_keyword_text(self, item: dict) -> str:
         """Extract keyword text from AlphaShop result."""

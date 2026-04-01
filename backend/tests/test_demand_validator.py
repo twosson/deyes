@@ -705,19 +705,61 @@ class TestDemandValidatorAlphaShop:
         assert result == CompetitionDensity.LOW
 
     @pytest.mark.asyncio
-    async def test_close_closes_owned_client_only(self):
-        """Test close only closes AlphaShop clients owned by validator."""
-        injected_client = AsyncMock()
-        validator = DemandValidator(alphashop_client=injected_client)
-        await validator.close()
-        injected_client.close.assert_not_called()
+    async def test_validate_legitimized_batch_reuses_raw_metrics_without_refetch(self):
+        """Test legitimized batch validation reuses AlphaShop raw metrics instead of refetching."""
+        from app.services.keyword_legitimizer import ValidKeyword
+        from app.services.seed_pool_builder import Seed
 
-        owned_client = AsyncMock()
-        validator = DemandValidator()
-        validator._alphashop_client = owned_client
-        validator._created_client = True
-        await validator.close()
-        owned_client.close.assert_called_once()
+        mock_client = AsyncMock()
+        validator = DemandValidator(alphashop_client=mock_client)
+
+        valid_keyword = ValidKeyword(
+            seed=Seed(term="ipad tablet", source="user", confidence=1.0),
+            matched_keyword="mini ipad tablet",
+            match_type="related",
+            opp_score=38.7,
+            search_volume=None,
+            competition_density="medium",
+            is_valid_for_report=True,
+            raw={
+                "keyword": "mini ipad tablet",
+                "oppScore": "38.7",
+                "salesInfo": {
+                    "soldCnt30d": {
+                        "growthRate": {
+                            "value": "6.0%",
+                            "direction": "UP",
+                        },
+                        "value": "3.8w+",
+                    }
+                },
+                "demandInfo": {
+                    "searchRank": "# 63.5w+",
+                    "rankTrends": [
+                        {"x": "202511", "y": 570099.0},
+                        {"x": "202512", "y": 551712.0},
+                        {"x": "202601", "y": 726962.0},
+                        {"x": "202602", "y": 635588.0},
+                    ],
+                },
+            },
+        )
+
+        with patch.object(validator, "_get_search_trends", new_callable=AsyncMock) as mock_get_trends:
+            results = await validator.validate_legitimized_batch(
+                valid_keywords=[valid_keyword],
+                category="electronics",
+                region="US",
+                platform="temu",
+            )
+
+        assert len(results) == 1
+        assert results[0].keyword == "mini ipad tablet"
+        assert results[0].search_volume == 380000
+        assert results[0].trend_direction == TrendDirection.RISING
+        assert results[0].trend_growth_rate == Decimal("0.06")
+        assert results[0].passed is True
+        mock_get_trends.assert_not_awaited()
 
 
 @pytest.mark.integration

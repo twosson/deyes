@@ -184,6 +184,44 @@ class TestKeywordLegitimizerService:
         assert results[0].is_valid_for_report is False
 
     @pytest.mark.asyncio
+    async def test_legitimize_seeds_filters_brand_keywords_for_report(self):
+        """Test legitimization marks brand-containing keywords invalid for report."""
+        mock_client = AsyncMock()
+        mock_client.search_keywords.return_value = {
+            "keyword_list": [
+                {
+                    "keyword": "mini ipad tablet",
+                    "oppScore": 65,
+                    "searchVolume": 380000,
+                }
+            ]
+        }
+
+        service = KeywordLegitimizerService(alphashop_client=mock_client)
+
+        seeds = [
+            Seed(
+                term="ipad tablet",
+                source="user",
+                confidence=1.0,
+                category="electronics",
+                region="US",
+                platform="amazon",
+            )
+        ]
+
+        results = await service.legitimize_seeds(
+            seeds=seeds,
+            region="US",
+            platform="amazon",
+            min_opp_score=20.0,
+        )
+
+        assert len(results) == 1
+        assert results[0].matched_keyword == "mini ipad tablet"
+        assert results[0].is_valid_for_report is False
+
+    @pytest.mark.asyncio
     async def test_legitimize_seeds_handles_api_errors(self):
         """Test legitimization handles API errors gracefully."""
         mock_client = AsyncMock()

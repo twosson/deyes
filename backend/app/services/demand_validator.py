@@ -1472,13 +1472,28 @@ class DemandValidator:
         objects and only falls back to provider lookup when needed.
         """
         results: list[DemandValidationResult] = []
+        reused_raw_metrics_count = 0
+        refetched_trends_count = 0
+
         for valid_keyword in valid_keywords:
+            raw_item = valid_keyword.raw if isinstance(valid_keyword.raw, dict) else {}
+            raw_has_demand_signals = bool(raw_item) and any(
+                key in raw_item for key in ("searchVolume", "salesInfo", "demandInfo", "soldCnt30d", "searchRank", "oppScore")
+            )
+
             search_volume = valid_keyword.search_volume
-            if search_volume is None:
+            if search_volume is None and raw_has_demand_signals:
+                search_volume = self._extract_search_volume_from_alphashop(raw_item)
+
+            if raw_has_demand_signals:
+                trend_growth_rate, trend_direction = self._extract_trend_from_alphashop(raw_item)
+                reused_raw_metrics_count += 1
+            elif search_volume is None:
                 search_volume, trend_growth_rate, trend_direction = await self._get_search_trends(
                     keyword=valid_keyword.matched_keyword,
                     region=region or "US",
                 )
+                refetched_trends_count += 1
             else:
                 opp_score = valid_keyword.opp_score or 0.0
                 if opp_score >= 70:
@@ -1526,5 +1541,7 @@ class DemandValidator:
             total=len(valid_keywords),
             passed=passed_count,
             failed=len(valid_keywords) - passed_count,
+            reused_raw_metrics_count=reused_raw_metrics_count,
+            refetched_trends_count=refetched_trends_count,
         )
         return results

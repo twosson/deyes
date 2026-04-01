@@ -28,6 +28,8 @@ from app.services.demand_validator import (
     TrendDirection,
 )
 from app.services.keyword_generator import KeywordResult
+from app.services.keyword_legitimizer import ValidKeyword
+from app.services.seed_pool_builder import Seed
 from app.services.source_adapter import ProductData
 
 
@@ -92,6 +94,46 @@ def mock_supplier_matcher():
     return matcher
 
 
+def _make_mock_keyword_legitimizer():
+    """Create mock keyword legitimizer that converts seeds to valid keywords."""
+    legitimizer = AsyncMock()
+
+    async def legitimize_side_effect(*, seeds, region, platform):
+        results = []
+        for seed in seeds:
+            results.append(
+                ValidKeyword(
+                    seed=seed,
+                    matched_keyword=seed.term,
+                    match_type="exact",
+                    opp_score=50.0,
+                    search_volume=5000,
+                    competition_density="low",
+                    is_valid_for_report=True,
+                    raw={"keyword": seed.term},
+                    report_keyword=seed.term,
+                )
+            )
+        return results
+
+    legitimizer.legitimize_seeds.side_effect = legitimize_side_effect
+    return legitimizer
+
+
+def _make_mock_seed_pool_builder():
+    """Create mock seed pool builder that returns empty list by default."""
+    builder = AsyncMock()
+    builder.build_seed_pool.return_value = []
+    return builder
+
+
+def _make_mock_exploration_seed_provider():
+    """Create mock exploration seed provider that returns empty list by default."""
+    provider = AsyncMock()
+    provider.get_exploration_seeds.return_value = []
+    return provider
+
+
 @pytest.mark.asyncio
 async def test_no_user_keywords_generate_validate_and_fetch(
     mock_db,
@@ -126,6 +168,9 @@ async def test_no_user_keywords_generate_validate_and_fetch(
     discovery_service = DemandDiscoveryService(
         demand_validator=demand_validator,
         keyword_generator=keyword_generator,
+        keyword_legitimizer=_make_mock_keyword_legitimizer(),
+        seed_pool_builder=_make_mock_seed_pool_builder(),
+        exploration_seed_provider=_make_mock_exploration_seed_provider(),
     )
 
     agent = ProductSelectorAgent(
@@ -208,6 +253,9 @@ async def test_rejected_user_keywords_recover_via_generated_keywords(
     discovery_service = DemandDiscoveryService(
         demand_validator=demand_validator,
         keyword_generator=keyword_generator,
+        keyword_legitimizer=_make_mock_keyword_legitimizer(),
+        seed_pool_builder=_make_mock_seed_pool_builder(),
+        exploration_seed_provider=_make_mock_exploration_seed_provider(),
     )
 
     agent = ProductSelectorAgent(
@@ -261,6 +309,9 @@ async def test_generation_failure_fails_fast(
     discovery_service = DemandDiscoveryService(
         demand_validator=demand_validator,
         keyword_generator=keyword_generator,
+        keyword_legitimizer=_make_mock_keyword_legitimizer(),
+        seed_pool_builder=_make_mock_seed_pool_builder(),
+        exploration_seed_provider=_make_mock_exploration_seed_provider(),
     )
 
     agent = ProductSelectorAgent(
@@ -306,6 +357,9 @@ async def test_zero_keyword_fails_fast(
     discovery_service = DemandDiscoveryService(
         demand_validator=demand_validator,
         keyword_generator=keyword_generator,
+        keyword_legitimizer=_make_mock_keyword_legitimizer(),
+        seed_pool_builder=_make_mock_seed_pool_builder(),
+        exploration_seed_provider=_make_mock_exploration_seed_provider(),
     )
 
     agent = ProductSelectorAgent(

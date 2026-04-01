@@ -227,6 +227,7 @@ class DemandDiscoveryRiskRule(RiskRule):
         mode_scores = {
             "user": 0,
             "generated": 10,
+            "exploration": 15,
             "fallback": 25,
             "none": 40,
         }

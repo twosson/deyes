@@ -47,6 +47,7 @@ class RecommendationService:
     DISCOVERY_MODE_ADJUSTMENTS = {
         "user": 3.0,
         "generated": 1.0,
+        "exploration": 0.0,
         "fallback": -4.0,
         "none": -6.0,
     }
@@ -213,6 +214,8 @@ class RecommendationService:
             reasons.append("需求关键词已人工确认")
         elif discovery_mode == "generated":
             reasons.append("基于生成关键词完成需求发现")
+        elif discovery_mode == "exploration":
+            reasons.append("基于探索模式自主发现候选，建议人工复核")
         elif discovery_mode == "fallback":
             reasons.append("使用回退关键词发现候选，建议谨慎验证")
         elif discovery_mode == "none":

@@ -16,6 +16,7 @@ from typing import Optional
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.services.demand_validator import DemandValidationResult, DemandValidator
+from app.services.exploration_seed_provider import ExplorationBrief, ExplorationSeedProvider
 from app.services.keyword_generator import KeywordGenerator
 from app.services.keyword_legitimizer import KeywordLegitimizerService, ValidKeyword
 from app.services.seed_pool_builder import Seed, SeedPoolBuilderService
@@ -116,6 +117,7 @@ class DemandDiscoveryService:
         keyword_generator: Optional[KeywordGenerator] = None,
         seed_pool_builder: Optional[SeedPoolBuilderService] = None,
         keyword_legitimizer: Optional[KeywordLegitimizerService] = None,
+        exploration_seed_provider: Optional[ExplorationSeedProvider] = None,
     ):
         self.settings = get_settings().model_copy(deep=True)
         self.demand_validator = demand_validator or DemandValidator(
@@ -132,6 +134,7 @@ class DemandDiscoveryService:
         )
         self.seed_pool_builder = seed_pool_builder or SeedPoolBuilderService()
         self.keyword_legitimizer = keyword_legitimizer or KeywordLegitimizerService()
+        self.exploration_seed_provider = exploration_seed_provider or ExplorationSeedProvider()
         self.logger = logger
 
     async def discover_keywords(
@@ -144,6 +147,7 @@ class DemandDiscoveryService:
         max_keywords: int = 10,
     ) -> DemandDiscoveryResult:
         """Discover and validate keywords for product selection."""
+        normalized_category = (category or "").strip() or None
         normalized_region = region or self.settings.keyword_generation_region or "US"
         normalized_platform = map_business_platform_to_alphashop(
             platform or self.settings.keyword_generation_platform
@@ -152,7 +156,7 @@ class DemandDiscoveryService:
 
         self.logger.info(
             "demand_discovery_started",
-            category=category,
+            category=normalized_category,
             keywords=normalized_keywords,
             region=normalized_region,
             platform=platform,
@@ -162,6 +166,29 @@ class DemandDiscoveryService:
 
         accumulated_rejections: list[DemandDiscoveryKeyword] = []
         prior_results: list[DemandDiscoveryResult] = []
+
+        # 0. Exploration mode: no category and no keywords (broad listing / general store mode)
+        if not normalized_category and not normalized_keywords:
+            self.logger.info(
+                "demand_discovery_exploration_mode",
+                region=normalized_region,
+                platform=platform,
+            )
+            exploration_result = await self._discover_from_exploration(
+                region=normalized_region,
+                platform=platform,
+                max_keywords=max_keywords,
+            )
+            self._log_metrics(
+                category=None,
+                region=normalized_region,
+                platform=platform,
+                result=exploration_result,
+                success=bool(exploration_result.validated_keywords),
+                skip=not bool(exploration_result.validated_keywords),
+                generated_recovery=False,
+            )
+            return exploration_result
 
         # 1. User-provided keywords first: treat them as seeds, not final AlphaShop queries.
         if normalized_keywords:
@@ -229,27 +256,28 @@ class DemandDiscoveryService:
 
         # 2. Runtime generation as explicit seed expansion path.
         generated_result = await self._discover_from_generated_keywords(
-            category=category,
+            category=normalized_category,
             region=normalized_region,
             platform=platform,
             max_keywords=max_keywords,
         )
         if generated_result.validated_keywords:
+            generated_recovery = bool(prior_results)
             merged_result = self._merge_results(
                 discovery_mode=generated_result.discovery_mode,
                 fallback_used=False,
-                degraded=generated_result.degraded,
+                degraded=generated_result.degraded or generated_recovery,
                 results=prior_results + [generated_result],
                 rejected_keywords=accumulated_rejections + generated_result.rejected_keywords,
             )
             self._log_metrics(
-                category=category,
+                category=normalized_category,
                 region=normalized_region,
                 platform=platform,
                 result=merged_result,
                 success=True,
                 skip=False,
-                generated_recovery=False,
+                generated_recovery=generated_recovery,
             )
             return merged_result
 
@@ -259,7 +287,7 @@ class DemandDiscoveryService:
         # 3. Nothing validated.
         self.logger.warning(
             "demand_discovery_no_valid_keywords",
-            category=category,
+            category=normalized_category,
             region=normalized_region,
             platform=platform,
             rejected=len(accumulated_rejections),
@@ -274,7 +302,7 @@ class DemandDiscoveryService:
             degraded_reason=self._first_degraded_reason(prior_results) or "no_valid_keywords",
         )
         self._log_metrics(
-            category=category,
+            category=normalized_category,
             region=normalized_region,
             platform=platform,
             result=final_result,
@@ -283,6 +311,71 @@ class DemandDiscoveryService:
             generated_recovery=False,
         )
         return final_result
+
+    async def _discover_from_exploration(
+        self,
+        *,
+        region: str,
+        platform: Optional[str],
+        max_keywords: int,
+    ) -> DemandDiscoveryResult:
+        """Discover keywords via exploration mode (no category, no user keywords).
+
+        Exploration mode is designed for broad listing / general store business model.
+        """
+        self.logger.info(
+            "demand_discovery_exploration_started",
+            region=region,
+            platform=platform,
+        )
+
+        brief = ExplorationBrief(
+            region=region,
+            platform=platform,
+            max_seeds=max_keywords * 2,
+            min_confidence=0.3,
+        )
+
+        exploration_seeds_raw = await self.exploration_seed_provider.get_exploration_seeds(brief)
+
+        # Convert ExplorationSeed to Seed
+        exploration_seeds: list[Seed] = []
+        for exp_seed in exploration_seeds_raw:
+            exploration_seeds.append(
+                Seed(
+                    term=exp_seed.term,
+                    source=exp_seed.source,
+                    confidence=exp_seed.confidence,
+                    category=None,
+                    region=region,
+                    platform=platform,
+                )
+            )
+
+        if not exploration_seeds:
+            return DemandDiscoveryResult(
+                validated_keywords=[],
+                rejected_keywords=[],
+                discovery_mode="exploration",
+                fallback_used=False,
+                degraded=True,
+                seeds=[],
+                valid_keywords=[],
+                seed_to_keyword_mapping=[],
+                degraded_reason="no_exploration_seeds_available",
+            )
+
+        result = await self._discover_from_seeds(
+            seeds=exploration_seeds,
+            category=None,
+            region=region,
+            platform=platform,
+            max_keywords=max_keywords,
+            discovery_mode="exploration",
+            degraded=False,
+        )
+        result.seeds = [seed.to_dict() for seed in exploration_seeds]
+        return result
 
     async def _discover_from_generated_keywords(
         self,

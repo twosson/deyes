@@ -62,6 +62,7 @@ class PricingConfig:
     DISCOVERY_MODE_ADJUSTMENTS = {
         "user": Decimal("0.00"),  # No adjustment for user-validated keywords
         "generated": Decimal("0.01"),  # +1% threshold for generated keywords
+        "exploration": Decimal("0.02"),  # +2% threshold for autonomous exploration mode
         "fallback": Decimal("0.03"),  # +3% threshold for fallback seeds
         "none": Decimal("0.05"),  # +5% threshold when no validation occurred
     }

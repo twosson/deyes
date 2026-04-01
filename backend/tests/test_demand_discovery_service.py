@@ -12,7 +12,10 @@ from app.services.demand_validator import (
     DemandValidationResult,
     TrendDirection,
 )
+from app.services.exploration_seed_provider import ExplorationSeed
 from app.services.keyword_generator import KeywordResult
+from app.services.keyword_legitimizer import ValidKeyword
+from app.services.seed_pool_builder import Seed
 
 
 @pytest.fixture
@@ -32,14 +35,63 @@ def mock_keyword_generator():
 
 
 @pytest.fixture
+def mock_keyword_legitimizer():
+    """Mock keyword legitimizer that converts seeds to valid keywords."""
+    legitimizer = AsyncMock()
+
+    async def legitimize_side_effect(*, seeds, region, platform):
+        results = []
+        for seed in seeds:
+            results.append(
+                ValidKeyword(
+                    seed=seed,
+                    matched_keyword=seed.term,
+                    match_type="exact",
+                    opp_score=50.0,
+                    search_volume=5000,
+                    competition_density="low",
+                    is_valid_for_report=True,
+                    raw={"keyword": seed.term},
+                    report_keyword=seed.term,
+                )
+            )
+        return results
+
+    legitimizer.legitimize_seeds.side_effect = legitimize_side_effect
+    return legitimizer
+
+
+@pytest.fixture
+def mock_seed_pool_builder():
+    """Mock seed pool builder that returns empty list by default."""
+    builder = AsyncMock()
+    builder.build_seed_pool.return_value = []
+    return builder
+
+
+@pytest.fixture
+def mock_exploration_seed_provider():
+    """Mock exploration seed provider that returns empty list by default."""
+    provider = AsyncMock()
+    provider.get_exploration_seeds.return_value = []
+    return provider
+
+
+@pytest.fixture
 def demand_discovery_service(
     mock_demand_validator,
     mock_keyword_generator,
+    mock_keyword_legitimizer,
+    mock_seed_pool_builder,
+    mock_exploration_seed_provider,
 ):
     """Create demand discovery service with mocks."""
     return DemandDiscoveryService(
         demand_validator=mock_demand_validator,
         keyword_generator=mock_keyword_generator,
+        keyword_legitimizer=mock_keyword_legitimizer,
+        seed_pool_builder=mock_seed_pool_builder,
+        exploration_seed_provider=mock_exploration_seed_provider,
     )
 
 
@@ -447,3 +499,67 @@ class TestDemandDiscoveryService:
             region="US",
             platform=None,
         )
+
+    @pytest.mark.asyncio
+    async def test_exploration_mode_discovers_keywords_without_inputs(
+        self,
+        demand_discovery_service,
+        mock_demand_validator,
+        mock_exploration_seed_provider,
+    ):
+        """No category/keywords should enter exploration mode and validate discovered keywords."""
+        mock_exploration_seed_provider.get_exploration_seeds.return_value = [
+            ExplorationSeed(
+                term="phone accessories",
+                source="supply",
+                confidence=0.4,
+                metadata={"signal_type": "supply", "region": "US"},
+            )
+        ]
+        mock_demand_validator.validate_batch.return_value = [
+            DemandValidationResult(
+                keyword="phone accessories",
+                search_volume=5000,
+                competition_density=CompetitionDensity.MEDIUM,
+                trend_direction=TrendDirection.RISING,
+                trend_growth_rate=None,
+                passed=True,
+                region="US",
+            ),
+        ]
+
+        result = await demand_discovery_service.discover_keywords(
+            category=None,
+            keywords=None,
+            region="US",
+            max_keywords=10,
+        )
+
+        assert result.discovery_mode == "exploration"
+        assert len(result.validated_keywords) == 1
+        assert result.validated_keywords[0].keyword == "phone accessories"
+        assert result.validated_keywords[0].source == "supply"
+        assert result.fallback_used is False
+        assert result.degraded is False
+        assert result.seeds[0]["term"] == "phone accessories"
+
+    @pytest.mark.asyncio
+    async def test_exploration_mode_returns_degraded_when_no_seeds(
+        self,
+        demand_discovery_service,
+        mock_exploration_seed_provider,
+    ):
+        """Exploration mode should return degraded result when no exploration seeds are available."""
+        mock_exploration_seed_provider.get_exploration_seeds.return_value = []
+
+        result = await demand_discovery_service.discover_keywords(
+            category=None,
+            keywords=None,
+            region="US",
+            max_keywords=10,
+        )
+
+        assert result.discovery_mode == "exploration"
+        assert result.validated_keywords == []
+        assert result.degraded is True
+        assert result.degraded_reason == "no_exploration_seeds_available"

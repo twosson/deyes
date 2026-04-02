@@ -286,6 +286,10 @@ class AlphaShop1688Adapter(SourceAdapter):
                 if moq is not None:
                     break
 
+        # Extract factory/verification signals from provider info
+        is_factory_result = self._detect_factory_from_company_name(company_name)
+        verified_supplier = self._detect_verified_supplier(provider_info)
+
         # Build supplier dict matching existing contract
         supplier_dict = {
             "supplier_name": company_name or f"1688 Supplier {item_id}",
@@ -297,6 +301,8 @@ class AlphaShop1688Adapter(SourceAdapter):
             "raw_payload": {
                 "provider_info": provider_info,
                 "offer": offer,
+                "is_factory_result": is_factory_result,
+                "verified_supplier": verified_supplier,
             },
         }
 
@@ -339,6 +345,48 @@ class AlphaShop1688Adapter(SourceAdapter):
             except Exception:
                 return None
         return None
+
+    def _detect_factory_from_company_name(self, company_name: Optional[str]) -> bool:
+        """Detect if supplier is a factory based on company name.
+
+        Heuristic: company name contains factory-related keywords in Chinese or English.
+        """
+        if not company_name:
+            return False
+
+        name_lower = company_name.lower()
+        factory_keywords = [
+            "工厂",  # factory (Chinese)
+            "厂",    # factory (Chinese short form)
+            "制造",  # manufacturing
+            "生产",  # production
+            "factory",
+            "manufacture",
+            "manufacturing",
+            "production",
+        ]
+
+        return any(keyword in name_lower for keyword in factory_keywords)
+
+    def _detect_verified_supplier(self, provider_info: dict[str, Any]) -> bool:
+        """Detect if supplier is verified based on provider info.
+
+        Checks for verification signals in provider info structure.
+        If AlphaShop adds explicit verification fields in the future, add them here.
+        """
+        if not provider_info:
+            return False
+
+        # Check for explicit verification flags (if AlphaShop provides them)
+        if provider_info.get("verified") or provider_info.get("isVerified"):
+            return True
+
+        # Check for certification/badge indicators
+        if provider_info.get("certifications") or provider_info.get("badges"):
+            return True
+
+        # Default: no verification signal detected
+        return False
 
     def normalize_report_products(
         self,

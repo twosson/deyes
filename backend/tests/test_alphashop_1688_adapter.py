@@ -222,6 +222,62 @@ class TestAlphaShop1688Adapter:
         assert len(result) == 3
 
     @pytest.mark.asyncio
+    async def test_fetch_products_extracts_factory_flags_from_provider_info(self):
+        """Test fetch_products extracts factory and verification flags for pricing service."""
+        mock_client = AsyncMock()
+        mock_client.intelligent_supplier_selection.return_value = {
+            "offer_info": {
+                "offerList": [
+                    {
+                        "itemId": "factory-item",
+                        "title": "Factory Direct Product",
+                        "itemPrice": {"price": "30.0"},
+                        "imageUrl": "https://example.com/factory.jpg",
+                        "providerInfo": {
+                            "companyName": "深圳电子工厂有限公司",  # Contains "工厂"
+                            "shopUrl": "https://shop.1688.com/factory",
+                        },
+                    },
+                    {
+                        "itemId": "trader-item",
+                        "title": "Trader Product",
+                        "itemPrice": {"price": "35.0"},
+                        "imageUrl": "https://example.com/trader.jpg",
+                        "providerInfo": {
+                            "companyName": "Guangzhou Trading Company",  # No factory keyword
+                            "shopUrl": "https://shop.1688.com/trader",
+                        },
+                    },
+                ]
+            },
+        }
+
+        adapter = AlphaShop1688Adapter(alphashop_client=mock_client)
+
+        result = await adapter.fetch_products(
+            keywords=["product"],
+            limit=10,
+        )
+
+        assert len(result) == 2
+
+        # Factory product should have is_factory_result=True
+        factory_product = result[0]
+        assert factory_product.source_product_id == "factory-item"
+        assert len(factory_product.supplier_candidates) == 1
+        factory_supplier = factory_product.supplier_candidates[0]
+        assert factory_supplier["raw_payload"]["is_factory_result"] is True
+        assert factory_supplier["raw_payload"]["verified_supplier"] is False
+
+        # Trader product should have is_factory_result=False
+        trader_product = result[1]
+        assert trader_product.source_product_id == "trader-item"
+        assert len(trader_product.supplier_candidates) == 1
+        trader_supplier = trader_product.supplier_candidates[0]
+        assert trader_supplier["raw_payload"]["is_factory_result"] is False
+        assert trader_supplier["raw_payload"]["verified_supplier"] is False
+
+    @pytest.mark.asyncio
     async def test_fetch_products_handles_api_error_gracefully(self):
         """Test fetch_products continues on API error for a keyword."""
         mock_client = AsyncMock()

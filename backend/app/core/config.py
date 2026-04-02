@@ -173,6 +173,10 @@ class Settings(BaseSettings):
     # Seasonal Calendar (Phase 4 Enhancement)
     enable_seasonal_boost: bool = True
     seasonal_calendar_lookahead_days: int = 90
+    seed_enable_seasonal_llm_expansion: bool = True
+    seed_seasonal_llm_max_queries: int = 5
+    seed_seasonal_llm_cache_ttl_seconds: int = 604800  # 7 days
+    seed_seasonal_llm_temperature: float = 0.3
 
     # Product Selection Demand Discovery (Opportunity-First Refactor)
     product_selection_require_demand_discovery: bool = True

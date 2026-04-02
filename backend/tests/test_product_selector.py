@@ -614,3 +614,64 @@ async def test_product_selector_1688_supply_products_bypass_strict_relevance_fil
     assert candidate.normalized_attributes["matched_keyword"] == "平板支架"
     assert mock_adapter.fetch_products.call_args.kwargs["keywords"] == ["平板支架"]
     mock_db.add.assert_not_called()
+
+
+def test_extract_opportunity_product_price_from_spinfo():
+    """Test price extraction from spInfo.spPriceMin/Max structure.
+
+    Regression test for -32% margin issue: platform_price should be extracted
+    from spInfo.spPriceMin/spPriceMax (target platform selling price in USD),
+    not from spItmMidPrice (1688 supplier price in CNY).
+
+    Ref: docs/ALPHASHOP_API_REFERENCE.md section 4.2
+    """
+    agent = ProductSelectorAgent()
+
+    # Test spInfo price extraction (recommended path)
+    item_with_spinfo = {
+        "spInfo": {
+            "spPriceMin": {"value": {"amount": "25.98"}},
+            "spPriceMax": {"value": {"amount": "28.99"}},
+            "spItmMidPrice": {"value": {"amount": "184.83"}},  # Should NOT use this
+        }
+    }
+    result = agent._extract_opportunity_product_price(item_with_spinfo)
+    assert result == Decimal("27.485")  # Midpoint of 25.98 and 28.99
+
+    # Test with only min price
+    item_min_only = {
+        "spInfo": {
+            "spPriceMin": {"value": {"amount": "20.00"}},
+        }
+    }
+    result = agent._extract_opportunity_product_price(item_min_only)
+    assert result == Decimal("20.00")
+
+    # Test with only max price
+    item_max_only = {
+        "spInfo": {
+            "spPriceMax": {"value": {"amount": "30.00"}},
+        }
+    }
+    result = agent._extract_opportunity_product_price(item_max_only)
+    assert result == Decimal("30.00")
+
+    # Test fallback to legacy price field
+    item_legacy = {"price": "15.99"}
+    result = agent._extract_opportunity_product_price(item_legacy)
+    assert result == Decimal("15.99")
+
+    # Test fallback with nested price dict
+    item_nested = {"price": {"amount": "22.50"}}
+    result = agent._extract_opportunity_product_price(item_nested)
+    assert result == Decimal("22.50")
+
+    # Test empty spInfo falls back to legacy price
+    item_empty_sp = {"spInfo": {}, "price": "10.00"}
+    result = agent._extract_opportunity_product_price(item_empty_sp)
+    assert result == Decimal("10.00")
+
+    # Test None/missing returns None
+    item_empty = {}
+    result = agent._extract_opportunity_product_price(item_empty)
+    assert result is None

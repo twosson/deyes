@@ -178,44 +178,59 @@ class SeedPoolBuilderService:
         # 4. Seasonal/event seeds
         seasonal_llm_count = 0
         seasonal_fallback_count = 0
-        if category and region:
+        if region:  # Allow seasonal expansion without category
             calendar = get_seasonal_calendar(lookahead_days=90)
             upcoming_events = calendar.get_upcoming_events(category=category)
+
             for event in upcoming_events:
-                # Try LLM expansion first if enabled
-                if self.settings.seed_enable_seasonal_llm_expansion:
-                    try:
-                        expanded_phrases = await self.seasonal_seed_expander.expand(
-                            event=event,
-                            category=category,
-                            region=region,
-                            limit=self.settings.seed_seasonal_llm_max_queries,
-                        )
-                        if expanded_phrases:
-                            for phrase in expanded_phrases:
-                                add_seed(phrase, "seasonal_llm", 0.72)
-                                seasonal_llm_count += 1
-                        else:
-                            # LLM returned empty, fallback to template
-                            event_seed = f"{event.name.lower()} {category}"
+                # When category is None, generate phrases for all event categories
+                if category is None:
+                    # Get all categories for this event
+                    event_categories = list(event.categories.keys())
+                    # Limit to top 2 categories by boost factor to avoid explosion
+                    event_categories = sorted(
+                        event_categories,
+                        key=lambda c: event.categories[c],
+                        reverse=True
+                    )[:2]
+                else:
+                    event_categories = [category]
+
+                for event_category in event_categories:
+                    # Try LLM expansion first if enabled
+                    if self.settings.seed_enable_seasonal_llm_expansion:
+                        try:
+                            expanded_phrases = await self.seasonal_seed_expander.expand(
+                                event=event,
+                                category=event_category,
+                                region=region,
+                                limit=self.settings.seed_seasonal_llm_max_queries,
+                            )
+                            if expanded_phrases:
+                                for phrase in expanded_phrases:
+                                    add_seed(phrase, "seasonal_llm", 0.72)
+                                    seasonal_llm_count += 1
+                            else:
+                                # LLM returned empty, fallback to template
+                                event_seed = f"{event.name.lower()} {event_category}"
+                                add_seed(event_seed, "seasonal", 0.7)
+                                seasonal_fallback_count += 1
+                        except Exception as exc:
+                            self.logger.warning(
+                                "seasonal_llm_expansion_failed",
+                                event_name=event.name,
+                                category=event_category,
+                                error=str(exc),
+                            )
+                            # Fallback to template on exception
+                            event_seed = f"{event.name.lower()} {event_category}"
                             add_seed(event_seed, "seasonal", 0.7)
                             seasonal_fallback_count += 1
-                    except Exception as exc:
-                        self.logger.warning(
-                            "seasonal_llm_expansion_failed",
-                            event_name=event.name,
-                            category=category,
-                            error=str(exc),
-                        )
-                        # Fallback to template on exception
-                        event_seed = f"{event.name.lower()} {category}"
+                    else:
+                        # Feature flag disabled, use template
+                        event_seed = f"{event.name.lower()} {event_category}"
                         add_seed(event_seed, "seasonal", 0.7)
                         seasonal_fallback_count += 1
-                else:
-                    # Feature flag disabled, use template
-                    event_seed = f"{event.name.lower()} {category}"
-                    add_seed(event_seed, "seasonal", 0.7)
-                    seasonal_fallback_count += 1
         elif category:
             # No region provided, use template-only approach
             calendar = get_seasonal_calendar(lookahead_days=90)

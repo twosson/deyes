@@ -391,4 +391,38 @@ class TestSeedPoolBuilderService:
         assert len(seasonal_llm_seeds) == 0
         mock_expander.expand.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_build_seed_pool_exploration_mode_with_seasonal_llm(self):
+        """Test seed pool with seasonal LLM expansion in exploration mode (no category)."""
+        mock_expander = AsyncMock()
+        # Mock expander to return different phrases for different categories
+        async def mock_expand(event, category, region, limit):
+            if category == "electronics":
+                return ["wireless earbuds", "phone stand"]
+            elif category == "jewelry":
+                return ["necklace gift", "bracelet set"]
+            return []
+
+        mock_expander.expand = AsyncMock(side_effect=mock_expand)
+
+        service = SeedPoolBuilderService(seasonal_seed_expander=mock_expander)
+
+        seeds = await service.build_seed_pool(
+            category=None,  # Exploration mode
+            user_keywords=None,
+            region="US",
+            platform="amazon",
+            max_seeds=50,
+        )
+
+        seasonal_llm_seeds = [s for s in seeds if s.source == "seasonal_llm"]
+        # Should have seasonal_llm seeds from multiple event categories
+        assert len(seasonal_llm_seeds) > 0
+        # Verify expander was called with actual categories (not None)
+        assert mock_expander.expand.call_count > 0
+        for call in mock_expander.expand.call_args_list:
+            _, kwargs = call
+            assert kwargs["category"] is not None
+            assert kwargs["category"] in ["electronics", "jewelry", "fashion", "home", "sports", "toys", "fitness", "beauty"]
+
 

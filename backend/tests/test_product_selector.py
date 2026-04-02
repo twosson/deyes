@@ -497,5 +497,120 @@ async def test_product_selector_1688_skips_when_no_opportunities_or_supply_candi
     assert result.output_data["skipped_reason"] == "no_supply_candidates_available"
     mock_opportunity_service.discover_opportunities.assert_called_once()
     mock_adapter.fetch_products.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_product_selector_1688_supply_products_bypass_strict_relevance_filter():
+    """Supply-only products should bypass strict opportunity relevance threshold.
+
+    Regression test: supply products recalled via search intelligence should not
+    be rejected by _filter_products_by_opportunity_relevance even if their title
+    doesn't text-match the opportunity/report keyword.
+    """
+    mock_adapter = AsyncMock()
+    # Supply product with Chinese title that doesn't contain English "tablet stand"
+    mock_adapter.fetch_products.return_value = [
+        ProductData(
+            source_platform=SourcePlatform.ALIBABA_1688,
+            source_product_id="supply-prod-1",
+            source_url="https://detail.1688.com/offer/supply-prod-1.html",
+            title="铝合金桌面手机架可调节高度创意简约",  # No "平板支架" or "tablet stand"
+            category="electronics",
+            currency="USD",
+            platform_price=Decimal("9.99"),
+            sales_count=1200,
+            rating=None,
+            main_image_url="https://example.com/supply-1.jpg",
+            raw_payload={},
+            normalized_attributes={"matched_keyword": "平板支架"},
+            supplier_candidates=[],
+        )
+    ]
+
+    mock_supplier_matcher = AsyncMock()
+    mock_supplier_matcher.find_suppliers.return_value = []
+
+    mock_discovery = AsyncMock()
+    mock_discovery.discover_keywords.return_value = DemandDiscoveryResult(
+        validated_keywords=[
+            DemandDiscoveryKeyword(
+                keyword="tablet stand",
+                source="user",
+                validation=DemandValidationResult(
+                    keyword="tablet stand",
+                    search_volume=5000,
+                    competition_density=CompetitionDensity.LOW,
+                    trend_direction=TrendDirection.RISING,
+                    trend_growth_rate=None,
+                ),
+            )
+        ],
+        rejected_keywords=[],
+        discovery_mode="user",
+        fallback_used=False,
+        degraded=False,
+        valid_keywords=[
+            {
+                "seed": {
+                    "term": "tablet stand",
+                    "source": "user",
+                    "confidence": 1.0,
+                    "category": "electronics",
+                    "region": "US",
+                    "platform": "Amazon",
+                },
+                "matched_keyword": "tablet stand",
+                "match_type": "exact",
+                "opp_score": 82.0,
+                "search_volume": 5000,
+                "competition_density": "low",
+                "is_valid_for_report": True,
+                "raw": {"keyword": "tablet stand", "keywordCn": "平板支架"},
+                "report_keyword": "tablet stand",
+                "keyword_cn": "平板支架",
+            }
+        ],
+    )
+
+    mock_opportunity_service = AsyncMock()
+    mock_opportunity_service.discover_opportunities.return_value = []
+
+    mock_db = MagicMock()
+    mock_db.add = MagicMock()
+    mock_db.commit = AsyncMock()
+    mock_db.rollback = AsyncMock()
+
+    agent = ProductSelectorAgent(
+        source_adapter=mock_adapter,
+        supplier_matcher=mock_supplier_matcher,
+        demand_discovery_service=mock_discovery,
+        opportunity_discovery_service=mock_opportunity_service,
+        enable_demand_validation=True,
+        enable_seasonal_boost=False,
+    )
+
+    context = AgentContext(
+        strategy_run_id=uuid4(),
+        db=mock_db,
+        input_data={
+            "platform": "alibaba_1688",
+            "category": "electronics",
+            "keywords": ["tablet stand"],
+            "region": "US",
+            "max_candidates": 10,
+        },
+    )
+
+    result = await agent.execute(context)
+
+    # Should succeed with 1 candidate despite title not matching keyword
+    assert result.success is True
+    assert result.output_data["count"] == 1
+    mock_adapter.fetch_products.assert_called_once()
+    assert mock_adapter.fetch_products.call_args.kwargs["keywords"] == ["平板支架"]
+
+    candidate = mock_db.add.call_args_list[0].args[0]
+    assert candidate.source_product_id == "supply-prod-1"
+    assert candidate.normalized_attributes["matched_keyword"] == "平板支架"
     assert mock_adapter.fetch_products.call_args.kwargs["keywords"] == ["平板支架"]
     mock_db.add.assert_not_called()

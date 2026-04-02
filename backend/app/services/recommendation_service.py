@@ -46,6 +46,7 @@ class RecommendationService:
     # Demand discovery confidence adjustments (2026-03-28)
     DISCOVERY_MODE_ADJUSTMENTS = {
         "user": 3.0,
+        "seed_pool": 1.0,
         "generated": 1.0,
         "exploration": 0.0,
         "fallback": -4.0,
@@ -212,8 +213,10 @@ class RecommendationService:
         # 4. Demand discovery reason
         if discovery_mode == "user":
             reasons.append("需求关键词已人工确认")
+        elif discovery_mode == "seed_pool":
+            reasons.append("基于品类种子池完成需求发现")
         elif discovery_mode == "generated":
-            reasons.append("基于生成关键词完成需求发现")
+            reasons.append("基于生成关键词完成需求发现（离线）")
         elif discovery_mode == "exploration":
             reasons.append("基于探索模式自主发现候选，建议人工复核")
         elif discovery_mode == "fallback":

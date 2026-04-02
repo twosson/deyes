@@ -176,7 +176,6 @@ class Settings(BaseSettings):
 
     # Product Selection Demand Discovery (Opportunity-First Refactor)
     product_selection_require_demand_discovery: bool = True
-    product_selection_enable_runtime_keyword_generation: bool = True
 
     # Auto Action Engine (2026-03-27)
     enable_auto_actions: bool = True

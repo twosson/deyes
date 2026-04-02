@@ -874,9 +874,24 @@ class ProductSelectorAgent(BaseAgent):
         discovery_mode: Optional[str],
         limit: int,
     ) -> list[ProductData]:
-        """Filter products strictly by opportunity relevance."""
+        """Filter products strictly by opportunity relevance.
+
+        Supply-only products (without opportunity_provenance) are exempt from
+        the strict threshold since they were already validated by 1688 recall.
+        """
         filtered: list[ProductData] = []
         for product in products:
+            normalized_attributes = dict(product.normalized_attributes or {})
+            opportunity_provenance = normalized_attributes.get("opportunity_provenance")
+
+            # Supply-only products: skip strict threshold, already validated by recall
+            if not opportunity_provenance and normalized_attributes.get("matched_keyword"):
+                filtered.append(product)
+                if len(filtered) >= limit:
+                    break
+                continue
+
+            # Opportunity products: apply strict relevance threshold
             relevance_score = self._calculate_product_relevance_score(product)
             if relevance_score < 0.2:
                 continue

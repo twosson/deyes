@@ -1,4 +1,4 @@
-"""Keyword legitimizer service for opportunity-first product selection.
+"""Keyword legitimizer service for seller-first product selection.
 
 Converts seeds into valid keywords using AlphaShop keyword.search API.
 """
@@ -18,7 +18,12 @@ logger = get_logger(__name__)
 
 @dataclass
 class ValidKeyword:
-    """A validated keyword ready for newproduct.report."""
+    """Search intelligence snapshot for a legitimized keyword.
+
+    Keeps the strict report-safe keyword semantics required by `newproduct.report`,
+    while also preserving the richer market/supply signals returned by
+    `keyword.search`.
+    """
 
     seed: Seed
     matched_keyword: str
@@ -29,6 +34,13 @@ class ValidKeyword:
     is_valid_for_report: bool
     raw: dict[str, Any]
     report_keyword: Optional[str] = None
+    keyword_cn: Optional[str] = None
+    sold_cnt_30d: Optional[int] = None
+    sold_amt_30d: Optional[float] = None
+    search_rank: Optional[int] = None
+    growth_rate: Optional[float] = None
+    rank_trends: Optional[list[int]] = None
+    radar_scores: Optional[dict[str, float]] = None
 
     def to_dict(self) -> dict:
         """Convert to dictionary."""
@@ -42,6 +54,13 @@ class ValidKeyword:
             "is_valid_for_report": self.is_valid_for_report,
             "raw": self.raw,
             "report_keyword": self.report_keyword,
+            "keyword_cn": self.keyword_cn,
+            "sold_cnt_30d": self.sold_cnt_30d,
+            "sold_amt_30d": self.sold_amt_30d,
+            "search_rank": self.search_rank,
+            "growth_rate": self.growth_rate,
+            "rank_trends": self.rank_trends,
+            "radar_scores": self.radar_scores,
         }
 
 
@@ -156,6 +175,13 @@ class KeywordLegitimizerService:
                         is_valid_for_report=is_valid,
                         raw=best_match,
                         report_keyword=report_keyword,
+                        keyword_cn=self._extract_keyword_cn(best_match),
+                        sold_cnt_30d=self._extract_sold_cnt_30d(best_match),
+                        sold_amt_30d=self._extract_sold_amt_30d(best_match),
+                        search_rank=self._extract_search_rank(best_match),
+                        growth_rate=self._extract_growth_rate(best_match),
+                        rank_trends=self._extract_rank_trends(best_match),
+                        radar_scores=self._extract_radar_scores(best_match),
                     )
                 )
 
@@ -335,6 +361,193 @@ class KeywordLegitimizerService:
         if re.search(r"[^a-z0-9\s\-]", keyword_lower):
             return True
         return False
+
+    def _extract_keyword_cn(self, item: dict) -> Optional[str]:
+        """Extract Chinese keyword for 1688 supply recall."""
+        value = item.get("keywordCn")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        return None
+
+    def _extract_sold_cnt_30d(self, item: dict) -> Optional[int]:
+        """Extract 30d sold count from AlphaShop result."""
+        sales_info = item.get("salesInfo") if isinstance(item.get("salesInfo"), dict) else {}
+        sold_cnt_30d_obj = sales_info.get("soldCnt30d")
+        if isinstance(sold_cnt_30d_obj, dict):
+            parsed = self._parse_chinese_number(sold_cnt_30d_obj.get("value"))
+            if parsed is not None:
+                return parsed
+
+        for candidate in (item.get("soldCnt30d"), sales_info.get("soldCnt30d")):
+            parsed = self._coerce_int(candidate)
+            if parsed is not None:
+                return parsed
+        return None
+
+    def _extract_sold_amt_30d(self, item: dict) -> Optional[float]:
+        """Extract 30d sold amount from AlphaShop result."""
+        sales_info = item.get("salesInfo") if isinstance(item.get("salesInfo"), dict) else {}
+        for candidate in (item.get("soldAmt30d"), sales_info.get("soldAmt30d")):
+            parsed = self._coerce_float(candidate)
+            if parsed is not None:
+                return parsed
+        return None
+
+    def _extract_search_rank(self, item: dict) -> Optional[int]:
+        """Extract search rank from AlphaShop result."""
+        demand_info = item.get("demandInfo") if isinstance(item.get("demandInfo"), dict) else {}
+        parsed = self._parse_chinese_number(demand_info.get("searchRank"))
+        if parsed is not None:
+            return parsed
+        return self._coerce_int(item.get("searchRank"))
+
+    def _extract_growth_rate(self, item: dict) -> Optional[float]:
+        """Extract growth rate from AlphaShop result."""
+        sales_info = item.get("salesInfo") if isinstance(item.get("salesInfo"), dict) else {}
+        sold_cnt_30d_obj = sales_info.get("soldCnt30d")
+        if isinstance(sold_cnt_30d_obj, dict):
+            growth_rate_obj = sold_cnt_30d_obj.get("growthRate")
+            if isinstance(growth_rate_obj, dict):
+                parsed = self._parse_percentage(growth_rate_obj.get("value"))
+                direction = (growth_rate_obj.get("direction") or "").upper()
+                if parsed is not None:
+                    return -parsed if direction == "DOWN" else parsed
+
+        direct_growth = self._coerce_float(item.get("growthRate"))
+        if direct_growth is not None:
+            return direct_growth
+        return None
+
+    def _extract_rank_trends(self, item: dict) -> Optional[list[int]]:
+        """Extract numeric rank trend series from AlphaShop result."""
+        demand_info = item.get("demandInfo") if isinstance(item.get("demandInfo"), dict) else {}
+        raw = item.get("rankTrends") or demand_info.get("rankTrends")
+        if not isinstance(raw, list):
+            return None
+
+        values: list[int] = []
+        for entry in raw:
+            if isinstance(entry, (int, float)):
+                values.append(int(entry))
+                continue
+            if isinstance(entry, str):
+                parsed = self._coerce_int(entry)
+                if parsed is not None:
+                    values.append(parsed)
+                continue
+            if isinstance(entry, dict):
+                for key in ("y", "rank", "value", "searchRank"):
+                    parsed = self._coerce_int(entry.get(key))
+                    if parsed is not None:
+                        values.append(parsed)
+                        break
+        return values or None
+
+    def _extract_radar_scores(self, item: dict) -> Optional[dict[str, float]]:
+        """Extract radar property scores from AlphaShop result."""
+        radar = item.get("radar")
+        if not isinstance(radar, dict):
+            return None
+
+        property_list = radar.get("propertyList")
+        if not isinstance(property_list, list):
+            return None
+
+        score_map: dict[str, float] = {}
+        name_map = {
+            "需求分": "demand_score",
+            "供给分": "supply_score",
+            "销售分": "sales_score",
+            "新品分": "newproduct_score",
+            "评价分": "review_score",
+        }
+        for entry in property_list:
+            if not isinstance(entry, dict):
+                continue
+            raw_name = entry.get("name")
+            normalized_name = name_map.get(raw_name)
+            if not normalized_name:
+                continue
+            value = self._coerce_float(entry.get("value"))
+            if value is not None:
+                score_map[normalized_name] = value
+        return score_map or None
+
+    def _coerce_int(self, value: Any) -> Optional[int]:
+        """Convert arbitrary value to int."""
+        if value is None or value == "":
+            return None
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+        if isinstance(value, str):
+            try:
+                return int(float(value))
+            except Exception:
+                return None
+        return None
+
+    def _coerce_float(self, value: Any) -> Optional[float]:
+        """Convert arbitrary value to float."""
+        if value is None or value == "":
+            return None
+        if isinstance(value, bool):
+            return float(value)
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            try:
+                return float(value)
+            except Exception:
+                return None
+        return None
+
+    def _parse_percentage(self, value: Any) -> Optional[float]:
+        """Parse percentage strings like '6.0%' to decimal ratio 0.06."""
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+        if not isinstance(value, str):
+            return None
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            if text.endswith("%"):
+                return float(text[:-1].strip()) / 100.0
+            return float(text)
+        except Exception:
+            return None
+
+    def _parse_chinese_number(self, value: Any) -> Optional[int]:
+        """Parse strings like '13.9w+' or '# 63.5w+' into integers."""
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return int(value)
+        if not isinstance(value, str):
+            return None
+
+        text = value.strip().lower().replace("#", "").replace(",", "")
+        if not text:
+            return None
+        text = text.rstrip("+")
+        multiplier = 1
+        if text.endswith("w"):
+            multiplier = 10000
+            text = text[:-1]
+        elif text.endswith("k"):
+            multiplier = 1000
+            text = text[:-1]
+
+        try:
+            return int(float(text.strip()) * multiplier)
+        except Exception:
+            return None
 
     def _extract_keyword_text(self, item: dict) -> str:
         """Extract keyword text from AlphaShop result."""

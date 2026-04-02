@@ -1,4 +1,4 @@
-"""End-to-end demand-first flow tests.
+"""End-to-end seller-first flow tests.
 
 These tests exercise the main path across:
 - DemandDiscoveryService
@@ -8,9 +8,9 @@ These tests exercise the main path across:
 The goal is to verify the system behavior from keyword discovery decisions
 through selector output metadata and adapter invocation semantics.
 
-After fail-fast refactor:
-- No fallback seeds are used
-- No validated keywords → RuntimeError → success=False
+After seller-first refactor:
+- No runtime keyword generation in online path
+- No validated keywords → clean skip with count=0
 """
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
@@ -27,7 +27,6 @@ from app.services.demand_validator import (
     DemandValidationResult,
     TrendDirection,
 )
-from app.services.keyword_generator import KeywordResult
 from app.services.keyword_legitimizer import ValidKeyword
 from app.services.seed_pool_builder import Seed
 from app.services.source_adapter import ProductData
@@ -53,7 +52,7 @@ def _make_validation_result(
     )
 
 
-def _make_product_data(title: str = "Demand-first product") -> ProductData:
+def _make_product_data(title: str = "Seller-first product") -> ProductData:
     return ProductData(
         source_platform=SourcePlatform.ALIBABA_1688,
         source_product_id="prod-1",
@@ -135,12 +134,12 @@ def _make_mock_exploration_seed_provider():
 
 
 @pytest.mark.asyncio
-async def test_no_user_keywords_generate_validate_and_fetch(
+async def test_no_user_keywords_use_seed_pool_and_fetch(
     mock_db,
     mock_source_adapter,
     mock_supplier_matcher,
 ):
-    """No-keyword request should generate, validate, then fetch with discovered keywords."""
+    """No-keyword request should use seed pool, validate, then fetch with discovered keywords."""
     demand_validator = AsyncMock()
     demand_validator.validate_batch.return_value = [
         _make_validation_result(
@@ -152,24 +151,22 @@ async def test_no_user_keywords_generate_validate_and_fetch(
         )
     ]
 
-    keyword_generator = AsyncMock()
-    keyword_generator.generate_selection_keywords.return_value = [
-        KeywordResult(
-            keyword="wireless earbuds",
-            search_volume=8000,
-            trend_score=85,
-            competition_density=CompetitionDensity.LOW,
-            related_keywords=["bluetooth earbuds"],
+    seed_pool_builder = _make_mock_seed_pool_builder()
+    seed_pool_builder.build_seed_pool.return_value = [
+        Seed(
+            term="wireless earbuds",
+            source="category_static",
+            confidence=0.5,
             category="electronics",
             region="US",
+            platform=None,
         )
     ]
 
     discovery_service = DemandDiscoveryService(
         demand_validator=demand_validator,
-        keyword_generator=keyword_generator,
         keyword_legitimizer=_make_mock_keyword_legitimizer(),
-        seed_pool_builder=_make_mock_seed_pool_builder(),
+        seed_pool_builder=seed_pool_builder,
         exploration_seed_provider=_make_mock_exploration_seed_provider(),
     )
 
@@ -185,7 +182,7 @@ async def test_no_user_keywords_generate_validate_and_fetch(
         strategy_run_id=uuid4(),
         db=mock_db,
         input_data={
-            "platform": "alibaba_1688",
+            "platform": "temu",
             "category": "electronics",
             "keywords": None,
             "region": "US",
@@ -197,64 +194,42 @@ async def test_no_user_keywords_generate_validate_and_fetch(
 
     assert result.success is True
     assert result.output_data["count"] == 1
-    assert result.output_data["demand_discovery"]["discovery_mode"] == "generated"
+    assert result.output_data["demand_discovery"]["discovery_mode"] == "seed_pool"
     assert result.output_data["demand_discovery"]["fallback_used"] is False
     assert result.output_data["demand_discovery"]["degraded"] is False
     assert result.output_data["demand_discovery"]["validated_keywords"][0]["keyword"] == "wireless earbuds"
-    assert result.output_data["demand_discovery"]["validated_keywords"][0]["source"] == "generated"
+    assert result.output_data["demand_discovery"]["validated_keywords"][0]["source"] == "category_static"
 
     mock_source_adapter.fetch_products.assert_called_once()
     assert mock_source_adapter.fetch_products.call_args.kwargs["keywords"] == ["wireless earbuds"]
 
 
 @pytest.mark.asyncio
-async def test_rejected_user_keywords_recover_via_generated_keywords(
+async def test_rejected_user_keywords_do_not_recover_via_generated_keywords(
     mock_db,
     mock_source_adapter,
     mock_supplier_matcher,
 ):
-    """Rejected user keywords should degrade into generated recovery before fetch."""
+    """Rejected user keywords should not trigger fallback recovery before fetch."""
     demand_validator = AsyncMock()
-    demand_validator.validate_batch.side_effect = [
-        [
-            _make_validation_result(
-                "bad keyword",
-                passed=False,
-                search_volume=10,
-                competition_density=CompetitionDensity.HIGH,
-                trend_direction=TrendDirection.DECLINING,
-                rejection_reasons=["low_search_volume"],
-            )
-        ],
-        [
-            _make_validation_result(
-                "trending product",
-                passed=True,
-                search_volume=9000,
-                competition_density=CompetitionDensity.LOW,
-                trend_direction=TrendDirection.RISING,
-            )
-        ],
-    ]
-
-    keyword_generator = AsyncMock()
-    keyword_generator.generate_selection_keywords.return_value = [
-        KeywordResult(
-            keyword="trending product",
-            search_volume=9000,
-            trend_score=88,
-            competition_density=CompetitionDensity.LOW,
-            related_keywords=[],
-            category="electronics",
-            region="US",
+    demand_validator.validate_batch.return_value = [
+        _make_validation_result(
+            "bad keyword",
+            passed=False,
+            search_volume=10,
+            competition_density=CompetitionDensity.HIGH,
+            trend_direction=TrendDirection.DECLINING,
+            rejection_reasons=["low_search_volume"],
         )
     ]
 
+    seed_pool_builder = _make_mock_seed_pool_builder()
+    seed_pool_builder.build_seed_pool.return_value = []
+
     discovery_service = DemandDiscoveryService(
         demand_validator=demand_validator,
-        keyword_generator=keyword_generator,
         keyword_legitimizer=_make_mock_keyword_legitimizer(),
-        seed_pool_builder=_make_mock_seed_pool_builder(),
+        seed_pool_builder=seed_pool_builder,
         exploration_seed_provider=_make_mock_exploration_seed_provider(),
     )
 
@@ -270,7 +245,7 @@ async def test_rejected_user_keywords_recover_via_generated_keywords(
         strategy_run_id=uuid4(),
         db=mock_db,
         input_data={
-            "platform": "alibaba_1688",
+            "platform": "temu",
             "category": "electronics",
             "keywords": ["bad keyword"],
             "region": "US",
@@ -281,84 +256,34 @@ async def test_rejected_user_keywords_recover_via_generated_keywords(
     result = await agent.execute(context)
 
     assert result.success is True
-    assert result.output_data["count"] == 1
-    assert result.output_data["demand_discovery"]["discovery_mode"] == "generated"
+    assert result.output_data["count"] == 0
+    assert result.output_data["skipped_reason"] == "no_validated_keywords_available"
+    assert result.output_data["demand_discovery"]["discovery_mode"] == "none"
     assert result.output_data["demand_discovery"]["fallback_used"] is False
     assert result.output_data["demand_discovery"]["degraded"] is True
-    assert result.output_data["demand_discovery"]["validated_keywords"][0]["keyword"] == "trending product"
     assert result.output_data["demand_discovery"]["rejected_keywords"][0]["keyword"] == "bad keyword"
     assert result.output_data["demand_discovery"]["rejected_keywords"][0]["source"] == "user"
 
-    mock_source_adapter.fetch_products.assert_called_once()
-    assert mock_source_adapter.fetch_products.call_args.kwargs["keywords"] == ["trending product"]
-
-
-@pytest.mark.asyncio
-async def test_generation_failure_fails_fast(
-    mock_db,
-    mock_source_adapter,
-    mock_supplier_matcher,
-):
-    """Generation failure should cause agent to fail fast with error."""
-    demand_validator = AsyncMock()
-    demand_validator.validate_batch.return_value = []
-
-    keyword_generator = AsyncMock()
-    keyword_generator.generate_selection_keywords.side_effect = RuntimeError("generator down")
-
-    discovery_service = DemandDiscoveryService(
-        demand_validator=demand_validator,
-        keyword_generator=keyword_generator,
-        keyword_legitimizer=_make_mock_keyword_legitimizer(),
-        seed_pool_builder=_make_mock_seed_pool_builder(),
-        exploration_seed_provider=_make_mock_exploration_seed_provider(),
-    )
-
-    agent = ProductSelectorAgent(
-        source_adapter=mock_source_adapter,
-        supplier_matcher=mock_supplier_matcher,
-        demand_discovery_service=discovery_service,
-        enable_demand_validation=True,
-        enable_seasonal_boost=False,
-    )
-
-    context = AgentContext(
-        strategy_run_id=uuid4(),
-        db=mock_db,
-        input_data={
-            "platform": "alibaba_1688",
-            "category": "electronics",
-            "keywords": None,
-            "region": "US",
-            "max_candidates": 10,
-        },
-    )
-
-    result = await agent.execute(context)
-
-    assert result.success is False
-    assert "No validated keywords available" in result.error_message
     mock_source_adapter.fetch_products.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_zero_keyword_fails_fast(
+async def test_empty_seed_pool_skips_cleanly(
     mock_db,
     mock_source_adapter,
     mock_supplier_matcher,
 ):
-    """When nothing validates, selector should fail fast with error."""
+    """Empty seed pool should skip cleanly when no validated keywords are available."""
     demand_validator = AsyncMock()
     demand_validator.validate_batch.return_value = []
 
-    keyword_generator = AsyncMock()
-    keyword_generator.generate_selection_keywords.return_value = []
+    seed_pool_builder = _make_mock_seed_pool_builder()
+    seed_pool_builder.build_seed_pool.return_value = []
 
     discovery_service = DemandDiscoveryService(
         demand_validator=demand_validator,
-        keyword_generator=keyword_generator,
         keyword_legitimizer=_make_mock_keyword_legitimizer(),
-        seed_pool_builder=_make_mock_seed_pool_builder(),
+        seed_pool_builder=seed_pool_builder,
         exploration_seed_provider=_make_mock_exploration_seed_provider(),
     )
 
@@ -374,7 +299,7 @@ async def test_zero_keyword_fails_fast(
         strategy_run_id=uuid4(),
         db=mock_db,
         input_data={
-            "platform": "alibaba_1688",
+            "platform": "temu",
             "category": "electronics",
             "keywords": None,
             "region": "US",
@@ -384,6 +309,7 @@ async def test_zero_keyword_fails_fast(
 
     result = await agent.execute(context)
 
-    assert result.success is False
-    assert "No validated keywords available" in result.error_message
+    assert result.success is True
+    assert result.output_data["count"] == 0
+    assert result.output_data["skipped_reason"] == "no_validated_keywords_available"
     mock_source_adapter.fetch_products.assert_not_called()

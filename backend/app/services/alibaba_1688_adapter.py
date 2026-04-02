@@ -298,7 +298,7 @@ class Alibaba1688Adapter(SourceAdapter):
     ) -> tuple[list[SearchSeed], str]:
         """Build search seeds from pre-validated keywords only.
 
-        Opportunity-first contract:
+        Seller-first contract:
         - All search seeds must come from upstream demand discovery / validation.
         - No fallback to category/cold-start seeds when keywords are empty.
         """

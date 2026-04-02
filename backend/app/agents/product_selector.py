@@ -1,12 +1,14 @@
 """Product Selector Agent.
 
-Opportunity-first refactor (Phase 1):
-- For AlphaShop / 1688 platform: newproduct.report.product_list becomes the
-  direct candidate source. The source adapter is used only for downstream
-  enrichment (supplier, pricing, risk), not for a second keyword search.
-- For other platforms: source adapter fetch_products is used as before.
-- All candidates retain full opportunity provenance in
-  demand_discovery_metadata and normalized_attributes.
+Seller-first refactor (Phase 1):
+- For AlphaShop / 1688 platform: demand discovery produces search intelligence,
+  which drives supply validation via the source adapter.
+- `newproduct.report.product_list` remains an optional enhancement source and is
+  merged with supply-validation products before downstream scoring.
+- For other platforms: source adapter fetch_products is used with validated
+  keywords as before.
+- All candidates retain provenance in demand_discovery_metadata and
+  normalized_attributes.
 """
 from decimal import Decimal
 import re
@@ -29,17 +31,17 @@ from app.services.supplier_matcher import SupplierMatcherService
 class ProductSelectorAgent(BaseAgent):
     """Agent for discovering candidate products.
 
-    Demand-first refactor:
+    Seller-first selection flow:
     - All 1688 searches must go through demand discovery first
-    - User keywords are validated before use
-    - Missing/failed keywords can recover via runtime generation
-    - Final fallback seeds must also be validated before use
+    - User/category inputs are normalized into strict search intelligence
+    - Search intelligence drives supply validation as the primary candidate path
+    - Opportunity products are optional enhancement inputs, not a hard gate
 
     Seasonal enhancement:
     - 90-day lookahead for upcoming events
     - Category-specific boost factors
     - Prioritizes products for upcoming holidays
-    - Fails fast when no validated keywords are available
+    - Skips cleanly when no validated keywords are available
     """
 
     def __init__(
@@ -93,7 +95,7 @@ class ProductSelectorAgent(BaseAgent):
             skipped_reason = None
             opportunities = []
 
-            # Demand-first keyword discovery
+            # Seller-first keyword discovery
             if self.require_demand_discovery:
                 discovery_result = await self.demand_discovery_service.discover_keywords(
                     category=category,
@@ -123,7 +125,7 @@ class ProductSelectorAgent(BaseAgent):
                     degraded=discovery_result.degraded,
                 )
 
-                # Opportunity discovery (Phase 1: metadata enrichment only)
+                # Opportunity discovery (Phase 1: optional enhancement for 1688)
                 if validated_keywords and discovery_result.valid_keywords:
                     try:
                         from app.services.keyword_legitimizer import ValidKeyword
@@ -153,6 +155,13 @@ class ProductSelectorAgent(BaseAgent):
                                 is_valid_for_report=vk_dict.get("is_valid_for_report", False),
                                 raw=vk_dict.get("raw", {}),
                                 report_keyword=vk_dict.get("report_keyword"),
+                                keyword_cn=vk_dict.get("keyword_cn"),
+                                sold_cnt_30d=vk_dict.get("sold_cnt_30d"),
+                                sold_amt_30d=vk_dict.get("sold_amt_30d"),
+                                search_rank=vk_dict.get("search_rank"),
+                                growth_rate=vk_dict.get("growth_rate"),
+                                rank_trends=vk_dict.get("rank_trends"),
+                                radar_scores=vk_dict.get("radar_scores"),
                             )
                             valid_keyword_objects.append(valid_kw)
 
@@ -227,8 +236,8 @@ class ProductSelectorAgent(BaseAgent):
                         self.source_adapter = TemuSourceAdapterV2()
                         created_adapter = True
                     elif platform == SourcePlatform.ALIBABA_1688:
-                        # For AlphaShop opportunity-first path, adapter is only used for enrichment
-                        # Primary candidate source is opportunity.product_list
+                        # For AlphaShop seller-first path, the adapter handles
+                        # supply validation and can also normalize opportunity report items.
                         from app.services.alphashop_1688_adapter import AlphaShop1688Adapter
 
                         self.source_adapter = AlphaShop1688Adapter()
@@ -239,51 +248,94 @@ class ProductSelectorAgent(BaseAgent):
                     self.source_adapter = MockSourceAdapter(platform)
 
             # Fetch products from source platform
-            # STRICT OPPORTUNITY-FIRST: For AlphaShop/1688, opportunity is mandatory
+            # Seller-first approach for AlphaShop/1688:
+            # - Primary: supply validation via search intelligence (keywordCn)
+            # - Enhancement: opportunity products from newproduct.report (if available)
             if platform == SourcePlatform.ALIBABA_1688:
-                if not opportunities:
-                    self.logger.error(
-                        "opportunity_first_failed_no_opportunities",
+                products = []
+
+                # 1. Opportunity products (optional enhancement)
+                if opportunities:
+                    if isinstance(self.source_adapter, SourceAdapter) and hasattr(
+                        self.source_adapter, "normalize_report_products"
+                    ):
+                        opportunity_products = self.source_adapter.normalize_report_products(
+                            opportunities=[opp.to_dict() for opp in opportunities],
+                            price_min=Decimal(str(price_min)) if price_min else None,
+                            price_max=Decimal(str(price_max)) if price_max else None,
+                            limit=max_candidates * 2,
+                        )
+                    else:
+                        opportunity_products = self._normalize_opportunity_products(
+                            opportunities=opportunities,
+                            price_min=Decimal(str(price_min)) if price_min else None,
+                            price_max=Decimal(str(price_max)) if price_max else None,
+                            limit=max_candidates * 2,
+                        )
+                    products.extend(opportunity_products)
+                    self.logger.info(
+                        "products_from_opportunities",
+                        count=len(opportunity_products),
+                        platform=platform.value,
+                        opportunities_count=len(opportunities),
+                        strategy_run_id=str(context.strategy_run_id),
+                    )
+
+                # 2. Supply validation via search intelligence (primary path)
+                supply_queries = self._build_supply_queries_from_search_intelligence(
+                    demand_discovery_payload or {}
+                )
+                if supply_queries:
+                    supply_products = await self.source_adapter.fetch_products(
+                        category=category,
+                        keywords=supply_queries,
+                        price_min=Decimal(str(price_min)) if price_min else None,
+                        price_max=Decimal(str(price_max)) if price_max else None,
+                        limit=max_candidates * 2,
+                        region=region,
+                    )
+                    products.extend(supply_products)
+                    self.logger.info(
+                        "products_from_search_intelligence_supply_validation",
+                        count=len(supply_products),
+                        supply_queries=supply_queries,
+                        platform=platform.value,
+                        strategy_run_id=str(context.strategy_run_id),
+                    )
+
+                # Deduplicate by source_product_id
+                seen_ids: set[str] = set()
+                deduplicated_products: list[ProductData] = []
+                for product in products:
+                    if product.source_product_id not in seen_ids:
+                        seen_ids.add(product.source_product_id)
+                        deduplicated_products.append(product)
+                products = deduplicated_products
+
+                self.logger.info(
+                    "products_merged_for_1688",
+                    total_count=len(products),
+                    platform=platform.value,
+                    strategy_run_id=str(context.strategy_run_id),
+                )
+
+                if not products:
+                    self.logger.warning(
+                        "no_supply_candidates_available",
                         strategy_run_id=str(context.strategy_run_id),
                         platform=platform.value,
                         validated_keywords_count=len(validated_keywords),
+                        opportunities_count=len(opportunities),
                     )
-                    return AgentResult(
-                        success=False,
-                        error_message="No validated opportunities available for AlphaShop/1688 platform. Opportunity-first selection requires valid market opportunities.",
-                        output_data={
-                            "candidate_ids": [],
-                            "count": 0,
-                            "skipped_reason": "no_opportunities_for_1688",
-                            "demand_discovery": demand_discovery_payload,
-                        },
-                    )
-
-                # Use adapter normalization if available (preferred for 1688 field handling)
-                if isinstance(self.source_adapter, SourceAdapter) and hasattr(
-                    self.source_adapter, "normalize_report_products"
-                ):
-                    products = self.source_adapter.normalize_report_products(
-                        opportunities=[opp.to_dict() for opp in opportunities],
-                        price_min=Decimal(str(price_min)) if price_min else None,
-                        price_max=Decimal(str(price_max)) if price_max else None,
-                        limit=max_candidates * 3,  # Get more for filtering
-                    )
-                else:
-                    # Fallback to local normalization for non-AlphaShop adapters
-                    products = self._normalize_opportunity_products(
-                        opportunities=opportunities,
-                        price_min=Decimal(str(price_min)) if price_min else None,
-                        price_max=Decimal(str(price_max)) if price_max else None,
-                        limit=max_candidates * 3,  # Get more for filtering
-                    )
-                self.logger.info(
-                    "products_from_opportunities",
-                    count=len(products),
-                    platform=platform.value,
-                    opportunities_count=len(opportunities),
-                    strategy_run_id=str(context.strategy_run_id),
-                )
+                    skipped_reason = "no_supply_candidates_available"
+                    output_data = {
+                        "candidate_ids": [],
+                        "count": 0,
+                        "skipped_reason": skipped_reason,
+                    }
+                    if demand_discovery_payload is not None:
+                        output_data["demand_discovery"] = demand_discovery_payload
+                    return AgentResult(success=True, output_data=output_data)
             else:
                 # For non-1688 platforms, use traditional adapter fetch
                 products = await self.source_adapter.fetch_products(
@@ -380,6 +432,22 @@ class ProductSelectorAgent(BaseAgent):
 
                 normalized_attributes = dict(product.normalized_attributes or {})
                 normalized_attributes["competition_density"] = competition_density
+
+                if platform == SourcePlatform.ALIBABA_1688 and demand_discovery_payload:
+                    search_intelligence = self._match_search_intelligence_for_product(
+                        product=product,
+                        demand_discovery_payload=demand_discovery_payload,
+                    )
+                    if search_intelligence:
+                        normalized_attributes["search_intelligence"] = search_intelligence
+                        normalized_attributes.setdefault(
+                            "matched_keyword", search_intelligence.get("matched_keyword")
+                        )
+                        normalized_attributes.setdefault(
+                            "report_keyword", search_intelligence.get("report_keyword")
+                        )
+                        if search_intelligence.get("keyword_cn"):
+                            normalized_attributes["supply_query"] = search_intelligence.get("keyword_cn")
 
                 opportunity_provenance = normalized_attributes.get("opportunity_provenance")
                 if opportunity_provenance:
@@ -492,6 +560,59 @@ class ProductSelectorAgent(BaseAgent):
             if created_adapter and hasattr(self.source_adapter, "close"):
                 await self.source_adapter.close()
                 self.source_adapter = None
+
+    def _match_search_intelligence_for_product(
+        self,
+        *,
+        product: ProductData,
+        demand_discovery_payload: dict[str, Any],
+    ) -> Optional[dict[str, Any]]:
+        """Match product to its source search intelligence metadata.
+
+        Uses matched_keyword from product normalized_attributes to find the
+        corresponding valid_keyword entry in demand_discovery_payload.
+        """
+        matched_keyword = (product.normalized_attributes or {}).get("matched_keyword")
+        if not matched_keyword:
+            return None
+
+        normalized_query = matched_keyword.lower().strip()
+        for item in demand_discovery_payload.get("valid_keywords") or []:
+            for candidate_key in ("keyword_cn", "report_keyword", "matched_keyword"):
+                candidate = (item.get(candidate_key) or "").strip()
+                if candidate.lower() == normalized_query:
+                    return item
+        return None
+
+    def _build_supply_queries_from_search_intelligence(self, demand_discovery_payload: dict[str, Any]) -> list[str]:
+        """Build 1688 supply queries from search intelligence.
+
+        Prefer `keyword_cn` because it is the strongest bridge from market
+        intelligence to 1688 supplier recall. Fall back to report/matched keyword
+        only when a stronger query is unavailable for that intelligence item.
+        """
+        queries: list[str] = []
+        seen: set[str] = set()
+
+        for item in demand_discovery_payload.get("valid_keywords") or []:
+            selected_query = None
+            for candidate in (
+                item.get("keyword_cn"),
+                item.get("report_keyword"),
+                item.get("matched_keyword"),
+            ):
+                query = (candidate or "").strip()
+                normalized = query.lower()
+                if not query or normalized in seen:
+                    continue
+                selected_query = query
+                seen.add(normalized)
+                break
+
+            if selected_query:
+                queries.append(selected_query)
+
+        return queries
 
     def _normalize_opportunity_products(
         self,

@@ -353,6 +353,79 @@ class TestKeywordLegitimizerService:
         assert len(results) == 3
         assert all(result.is_valid_for_report is False for result in results)
 
+
+    @pytest.mark.asyncio
+    async def test_legitimize_seeds_extracts_search_intelligence_fields(self):
+        """Test legitimization preserves keyword.search market intelligence fields."""
+        mock_client = AsyncMock()
+        mock_client.search_keywords.return_value = {
+            "keyword_list": [
+                {
+                    "keyword": "tablet stand",
+                    "keywordCn": "平板支架",
+                    "oppScore": 82,
+                    "searchVolume": 5000,
+                    "salesInfo": {
+                        "soldCnt30d": {
+                            "value": "13.9w+",
+                            "growthRate": {"value": "6.0%", "direction": "UP"},
+                        },
+                        "soldAmt30d": "123456.7",
+                    },
+                    "demandInfo": {
+                        "searchRank": "# 63.5w+",
+                        "rankTrends": [{"searchRank": "635000"}, {"searchRank": 620000}, "610000"],
+                    },
+                    "radar": {
+                        "propertyList": [
+                            {"name": "需求分", "value": 88},
+                            {"name": "供给分", "value": 52},
+                            {"name": "销售分", "value": "73"},
+                            {"name": "新品分", "value": 64},
+                            {"name": "评价分", "value": 91},
+                        ]
+                    },
+                }
+            ]
+        }
+
+        service = KeywordLegitimizerService(alphashop_client=mock_client)
+
+        seeds = [
+            Seed(
+                term="tablet stand",
+                source="user",
+                confidence=1.0,
+                category="electronics",
+                region="US",
+                platform="amazon",
+            )
+        ]
+
+        results = await service.legitimize_seeds(
+            seeds=seeds,
+            region="US",
+            platform="amazon",
+            min_opp_score=20.0,
+        )
+
+        assert len(results) == 1
+        result = results[0]
+        assert result.keyword_cn == "平板支架"
+        assert result.sold_cnt_30d == 139000
+        assert result.sold_amt_30d == 123456.7
+        assert result.search_rank == 635000
+        assert result.growth_rate == 0.06
+        assert result.rank_trends == [635000, 620000, 610000]
+        assert result.radar_scores == {
+            "demand_score": 88.0,
+            "supply_score": 52.0,
+            "sales_score": 73.0,
+            "newproduct_score": 64.0,
+            "review_score": 91.0,
+        }
+        assert result.to_dict()["keyword_cn"] == "平板支架"
+
     @pytest.mark.asyncio
     async def test_legitimize_seeds_without_client(self):
         """Test legitimization returns empty when client unavailable."""

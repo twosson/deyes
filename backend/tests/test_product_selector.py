@@ -1,4 +1,4 @@
-"""Tests for ProductSelectorAgent demand-first behavior."""
+"""Tests for ProductSelectorAgent seller-first behavior."""
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
@@ -158,8 +158,11 @@ async def test_product_selector_uses_opportunity_products_for_1688():
                 "search_volume": 5000,
                 "competition_density": "low",
                 "is_valid_for_report": True,
-                "raw": {"keyword": "tablet stand"},
+                "raw": {"keyword": "tablet stand", "keywordCn": "平板支架"},
                 "report_keyword": "tablet stand",
+                "keyword_cn": "平板支架",
+                "sold_cnt_30d": 139000,
+                "growth_rate": 0.06,
             }
         ],
     )
@@ -218,7 +221,8 @@ async def test_product_selector_uses_opportunity_products_for_1688():
 
     assert result.success is True
     assert result.output_data["count"] == 1
-    mock_adapter.fetch_products.assert_not_called()
+    mock_adapter.fetch_products.assert_called_once()
+    assert mock_adapter.fetch_products.call_args.kwargs["keywords"] == ["平板支架"]
     mock_opportunity_service.discover_opportunities.assert_called_once()
     mock_supplier_matcher.find_suppliers.assert_called_once()
 
@@ -229,6 +233,8 @@ async def test_product_selector_uses_opportunity_products_for_1688():
     assert candidate.normalized_attributes["report_keyword"] == "tablet stand"
     assert candidate.normalized_attributes["opportunity_keyword"] == "tablet stand"
     assert candidate.normalized_attributes["opportunity_score"] == 88.0
+    assert candidate.normalized_attributes["search_intelligence"]["keyword_cn"] == "平板支架"
+    assert candidate.normalized_attributes["supply_query"] == "平板支架"
     assert candidate.demand_discovery_metadata["opportunity"]["keyword"] == "tablet stand"
 
 
@@ -295,8 +301,121 @@ async def test_product_selector_skips_when_no_validated_keywords():
 
 
 @pytest.mark.asyncio
-async def test_product_selector_1688_fails_when_no_opportunities():
-    """1688 should fail fast when no opportunities are discovered, without fallback fetch."""
+async def test_product_selector_1688_uses_supply_validation_when_no_opportunities():
+    """1688 should use search-intelligence supply validation as the primary path when no opportunities exist."""
+    mock_adapter = AsyncMock()
+    mock_adapter.fetch_products.return_value = [
+        ProductData(
+            source_platform=SourcePlatform.ALIBABA_1688,
+            source_product_id="supply-prod-1",
+            source_url="https://detail.1688.com/offer/supply-prod-1.html",
+            title="平板支架 Adjustable Tablet Stand",
+            category="electronics",
+            currency="USD",
+            platform_price=Decimal("9.99"),
+            sales_count=1200,
+            rating=None,
+            main_image_url="https://example.com/supply-1.jpg",
+            raw_payload={},
+            normalized_attributes={"matched_keyword": "平板支架"},
+            supplier_candidates=[],
+        )
+    ]
+
+    mock_supplier_matcher = AsyncMock()
+    mock_supplier_matcher.find_suppliers.return_value = []
+
+    mock_discovery = AsyncMock()
+    mock_discovery.discover_keywords.return_value = DemandDiscoveryResult(
+        validated_keywords=[
+            DemandDiscoveryKeyword(
+                keyword="tablet stand",
+                source="user",
+                validation=DemandValidationResult(
+                    keyword="tablet stand",
+                    search_volume=5000,
+                    competition_density=CompetitionDensity.LOW,
+                    trend_direction=TrendDirection.RISING,
+                    trend_growth_rate=None,
+                ),
+            )
+        ],
+        rejected_keywords=[],
+        discovery_mode="user",
+        fallback_used=False,
+        degraded=False,
+        valid_keywords=[
+            {
+                "seed": {
+                    "term": "tablet stand",
+                    "source": "user",
+                    "confidence": 1.0,
+                    "category": "electronics",
+                    "region": "US",
+                    "platform": "Amazon",
+                },
+                "matched_keyword": "tablet stand",
+                "match_type": "exact",
+                "opp_score": 82.0,
+                "search_volume": 5000,
+                "competition_density": "low",
+                "is_valid_for_report": True,
+                "raw": {"keyword": "tablet stand", "keywordCn": "平板支架"},
+                "report_keyword": "tablet stand",
+                "keyword_cn": "平板支架",
+            }
+        ],
+    )
+
+    mock_opportunity_service = AsyncMock()
+    mock_opportunity_service.discover_opportunities.return_value = []
+
+    mock_db = MagicMock()
+    mock_db.add = MagicMock()
+    mock_db.commit = AsyncMock()
+    mock_db.rollback = AsyncMock()
+
+    agent = ProductSelectorAgent(
+        source_adapter=mock_adapter,
+        supplier_matcher=mock_supplier_matcher,
+        demand_discovery_service=mock_discovery,
+        opportunity_discovery_service=mock_opportunity_service,
+        enable_demand_validation=True,
+        enable_seasonal_boost=False,
+    )
+
+    context = AgentContext(
+        strategy_run_id=uuid4(),
+        db=mock_db,
+        input_data={
+            "platform": "alibaba_1688",
+            "category": "electronics",
+            "keywords": ["tablet stand"],
+            "region": "US",
+            "max_candidates": 10,
+        },
+    )
+
+    result = await agent.execute(context)
+
+    assert result.success is True
+    assert result.output_data["count"] == 1
+    mock_opportunity_service.discover_opportunities.assert_called_once()
+    mock_adapter.fetch_products.assert_called_once()
+    assert mock_adapter.fetch_products.call_args.kwargs["keywords"] == ["平板支架"]
+
+    candidate = mock_db.add.call_args_list[0].args[0]
+    assert candidate.source_product_id == "supply-prod-1"
+    assert candidate.normalized_attributes["search_intelligence"]["keyword_cn"] == "平板支架"
+    assert candidate.normalized_attributes["matched_keyword"] == "平板支架"
+    assert candidate.normalized_attributes["report_keyword"] == "tablet stand"
+    assert candidate.normalized_attributes["supply_query"] == "平板支架"
+    assert candidate.demand_discovery_metadata["valid_keywords"][0]["keyword_cn"] == "平板支架"
+
+
+@pytest.mark.asyncio
+async def test_product_selector_1688_skips_when_no_opportunities_or_supply_candidates():
+    """1688 should cleanly skip when both opportunity enhancement and supply validation return no products."""
     mock_adapter = AsyncMock()
     mock_adapter.fetch_products.return_value = []
 
@@ -335,8 +454,9 @@ async def test_product_selector_1688_fails_when_no_opportunities():
                 "search_volume": 5000,
                 "competition_density": "low",
                 "is_valid_for_report": True,
-                "raw": {"keyword": "tablet stand"},
+                "raw": {"keyword": "tablet stand", "keywordCn": "平板支架"},
                 "report_keyword": "tablet stand",
+                "keyword_cn": "平板支架",
             }
         ],
     )
@@ -372,8 +492,10 @@ async def test_product_selector_1688_fails_when_no_opportunities():
 
     result = await agent.execute(context)
 
-    assert result.success is False
-    assert "No validated opportunities available" in result.error_message
-    assert result.output_data["skipped_reason"] == "no_opportunities_for_1688"
-    mock_adapter.fetch_products.assert_not_called()
+    assert result.success is True
+    assert result.output_data["count"] == 0
+    assert result.output_data["skipped_reason"] == "no_supply_candidates_available"
+    mock_opportunity_service.discover_opportunities.assert_called_once()
+    mock_adapter.fetch_products.assert_called_once()
+    assert mock_adapter.fetch_products.call_args.kwargs["keywords"] == ["平板支架"]
     mock_db.add.assert_not_called()

@@ -154,7 +154,7 @@ class KeywordGenerator:
     ) -> list[KeywordResult]:
         """Generate keywords for real-time product selection.
 
-        Opportunity-first refactor: No longer uses default category fallback.
+        Seller-first refactor: No longer uses default category fallback.
         If category is None, returns empty list to avoid masking missing context.
         """
         self.logger.info(

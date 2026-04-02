@@ -20,11 +20,11 @@ logger = get_logger(__name__)
 class AlphaShop1688Adapter(SourceAdapter):
     """1688 product discovery adapter using AlphaShop intelligent supplier selection API.
 
-    Opportunity-first role:
-    - `fetch_products(...)` remains the legacy keyword-driven discovery path.
+    Seller-first role:
+    - `fetch_products(...)` is the primary supply validation path, driven by
+      search intelligence (keyword_cn, report_keyword, matched_keyword).
     - `normalize_report_products(...)` converts `newproduct.report.product_list`
-      items into ProductData so opportunity products can directly enter the
-      downstream supplier/pricing/risk pipeline.
+      items into ProductData for optional opportunity enhancement.
     """
 
     CNY_TO_USD_RATE = Decimal("0.14")
@@ -350,8 +350,8 @@ class AlphaShop1688Adapter(SourceAdapter):
     ) -> list[ProductData]:
         """Normalize AlphaShop newproduct.report items into ProductData.
 
-        This is the opportunity-first entry point for converting report items
-        into candidates without performing a second keyword search.
+        This is the seller-first opportunity-enhancement entry point for converting
+        report items into candidates without performing a second keyword search.
 
         Args:
             opportunities: List of opportunity dicts with `product_list` and

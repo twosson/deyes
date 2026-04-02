@@ -13,7 +13,6 @@ from app.services.demand_validator import (
     TrendDirection,
 )
 from app.services.exploration_seed_provider import ExplorationSeed
-from app.services.keyword_generator import KeywordResult
 from app.services.keyword_legitimizer import ValidKeyword
 from app.services.seed_pool_builder import Seed
 
@@ -134,51 +133,26 @@ class TestDemandDiscoveryService:
         assert result.degraded is False
 
     @pytest.mark.asyncio
-    async def test_user_keywords_all_rejected_triggers_generation(
+    async def test_user_keywords_all_rejected_returns_none_without_generated_recovery(
         self,
         demand_discovery_service,
         mock_demand_validator,
-        mock_keyword_generator,
+        mock_seed_pool_builder,
     ):
-        """Test user keywords rejected triggers keyword generation."""
+        """Rejected user keywords should not trigger fallback recovery."""
         # Arrange
-        mock_demand_validator.validate_batch.side_effect = [
-            # User keywords rejected
-            [
-                DemandValidationResult(
-                    keyword="bad keyword",
-                    search_volume=10,
-                    competition_density=CompetitionDensity.HIGH,
-                    trend_direction=TrendDirection.DECLINING,
-                    trend_growth_rate=None,
-                    passed=False,
-                    rejection_reasons=["low_search_volume"],
-                ),
-            ],
-            # Generated keywords validated
-            [
-                DemandValidationResult(
-                    keyword="trending product",
-                    search_volume=8000,
-                    competition_density=CompetitionDensity.LOW,
-                    trend_direction=TrendDirection.RISING,
-                    trend_growth_rate=None,
-                    passed=True,
-                ),
-            ],
-        ]
-
-        mock_keyword_generator.generate_selection_keywords.return_value = [
-            KeywordResult(
-                keyword="trending product",
-                search_volume=8000,
-                trend_score=85,
-                competition_density=CompetitionDensity.LOW,
-                related_keywords=[],
-                category="electronics",
-                region="US",
+        mock_demand_validator.validate_batch.return_value = [
+            DemandValidationResult(
+                keyword="bad keyword",
+                search_volume=10,
+                competition_density=CompetitionDensity.HIGH,
+                trend_direction=TrendDirection.DECLINING,
+                trend_growth_rate=None,
+                passed=False,
+                rejection_reasons=["low_search_volume"],
             ),
         ]
+        mock_seed_pool_builder.build_seed_pool.return_value = []
 
         demand_discovery_service.logger = MagicMock()
 
@@ -191,54 +165,52 @@ class TestDemandDiscoveryService:
         )
 
         # Assert
-        assert result.discovery_mode == "generated"
-        assert len(result.validated_keywords) == 1
-        assert result.validated_keywords[0].keyword == "trending product"
-        assert result.validated_keywords[0].source == "generated"
+        assert result.discovery_mode == "none"
+        assert len(result.validated_keywords) == 0
         assert len(result.rejected_keywords) == 1
         assert result.rejected_keywords[0].keyword == "bad keyword"
+        assert result.rejected_keywords[0].source == "user"
         assert result.fallback_used is False
-        assert result.degraded is True  # User keywords failed
+        assert result.degraded is True
         demand_discovery_service.logger.info.assert_any_call(
             "demand_discovery_metrics",
             category="electronics",
             region="US",
             platform=None,
-            discovery_mode="generated",
-            success=True,
-            skip=False,
+            discovery_mode="none",
+            success=False,
+            skip=True,
             fallback_used=False,
             degraded=True,
-            generated_recovery=True,
+            generated_recovery=False,
             validated_fallback=False,
-            validated_keywords_count=1,
+            validated_keywords_count=0,
             rejected_keywords_count=1,
-            avg_validated_keywords_count=1,
-            discovery_success_rate=1.0,
-            generated_recovery_rate=1.0,
+            avg_validated_keywords_count=0,
+            discovery_success_rate=0.0,
+            generated_recovery_rate=0.0,
             validated_fallback_rate=0.0,
-            skip_rate=0.0,
-            selection_triggered_per_category=1,
+            skip_rate=1.0,
+            selection_triggered_per_category=0,
         )
 
     @pytest.mark.asyncio
-    async def test_no_user_keywords_triggers_generation(
+    async def test_no_user_keywords_uses_seed_pool(
         self,
         demand_discovery_service,
         mock_demand_validator,
-        mock_keyword_generator,
+        mock_seed_pool_builder,
     ):
-        """Test no user keywords triggers keyword generation."""
+        """Test no user keywords triggers category seed-pool discovery."""
         # Arrange
-        mock_keyword_generator.generate_selection_keywords.return_value = [
-            KeywordResult(
-                keyword="smart watch",
-                search_volume=12000,
-                trend_score=90,
-                competition_density=CompetitionDensity.MEDIUM,
-                related_keywords=["fitness tracker"],
+        mock_seed_pool_builder.build_seed_pool.return_value = [
+            Seed(
+                term="smart watch",
+                source="category_static",
+                confidence=0.5,
                 category="electronics",
                 region="US",
+                platform=None,
             ),
         ]
 
@@ -262,49 +234,21 @@ class TestDemandDiscoveryService:
         )
 
         # Assert
-        assert result.discovery_mode == "generated"
+        assert result.discovery_mode == "seed_pool"
         assert len(result.validated_keywords) == 1
         assert result.validated_keywords[0].keyword == "smart watch"
         assert result.fallback_used is False
         assert result.degraded is False
 
     @pytest.mark.asyncio
-    async def test_generation_fails_returns_empty(
+    async def test_empty_seed_pool_returns_empty(
         self,
         demand_discovery_service,
-        mock_demand_validator,
-        mock_keyword_generator,
+        mock_seed_pool_builder,
     ):
-        """Test generation failure returns empty result with degraded flag."""
+        """Test empty seed pool returns empty result with degraded flag."""
         # Arrange
-        mock_keyword_generator.generate_selection_keywords.side_effect = Exception(
-            "API error"
-        )
-
-        # Act
-        result = await demand_discovery_service.discover_keywords(
-            category="electronics",
-            keywords=None,
-            region="US",
-            max_keywords=10,
-        )
-
-        # Assert
-        assert result.discovery_mode == "generated"
-        assert len(result.validated_keywords) == 0
-        assert result.fallback_used is False
-        assert result.degraded is True
-
-    @pytest.mark.asyncio
-    async def test_all_paths_fail_returns_empty(
-        self,
-        demand_discovery_service,
-        mock_demand_validator,
-        mock_keyword_generator,
-    ):
-        """Test all discovery paths fail returns empty result."""
-        # Arrange
-        mock_keyword_generator.generate_selection_keywords.return_value = []
+        mock_seed_pool_builder.build_seed_pool.return_value = []
 
         # Act
         result = await demand_discovery_service.discover_keywords(
@@ -321,15 +265,38 @@ class TestDemandDiscoveryService:
         assert result.degraded is True
 
     @pytest.mark.asyncio
-    async def test_generation_empty_returns_none_mode(
+    async def test_all_paths_fail_returns_empty(
         self,
         demand_discovery_service,
-        mock_demand_validator,
-        mock_keyword_generator,
+        mock_seed_pool_builder,
     ):
-        """Test generation returning empty list results in none mode."""
+        """Test user path and seed-pool path both failing returns empty result."""
         # Arrange
-        mock_keyword_generator.generate_selection_keywords.return_value = []
+        mock_seed_pool_builder.build_seed_pool.return_value = []
+
+        # Act
+        result = await demand_discovery_service.discover_keywords(
+            category="electronics",
+            keywords=None,
+            region="US",
+            max_keywords=10,
+        )
+
+        # Assert
+        assert result.discovery_mode == "none"
+        assert len(result.validated_keywords) == 0
+        assert result.fallback_used is False
+        assert result.degraded is True
+
+    @pytest.mark.asyncio
+    async def test_seed_pool_empty_returns_none_mode(
+        self,
+        demand_discovery_service,
+        mock_seed_pool_builder,
+    ):
+        """Test seed-pool returning empty list results in none mode."""
+        # Arrange
+        mock_seed_pool_builder.build_seed_pool.return_value = []
 
         # Act
         result = await demand_discovery_service.discover_keywords(
@@ -379,23 +346,22 @@ class TestDemandDiscoveryService:
         assert len(call_args.kwargs["keywords"]) == 1
 
     @pytest.mark.asyncio
-    async def test_region_passed_to_validator_and_generator(
+    async def test_region_passed_to_seed_pool_and_validator(
         self,
         demand_discovery_service,
         mock_demand_validator,
-        mock_keyword_generator,
+        mock_seed_pool_builder,
     ):
-        """Test region is propagated to generator and validator for runtime discovery."""
-        mock_keyword_generator.generate_selection_keywords.return_value = [
-            KeywordResult(
-                keyword="smart watch",
-                search_volume=12000,
-                trend_score=90,
-                competition_density=CompetitionDensity.MEDIUM,
-                related_keywords=["fitness tracker"],
+        """Test region is propagated to seed pool builder and validator for category discovery."""
+        mock_seed_pool_builder.build_seed_pool.return_value = [
+            Seed(
+                term="smart watch",
+                source="category_static",
+                confidence=0.5,
                 category="electronics",
                 region="DE",
-            ),
+                platform=None,
+            )
         ]
 
         mock_demand_validator.validate_batch.return_value = [
@@ -417,12 +383,13 @@ class TestDemandDiscoveryService:
             max_keywords=10,
         )
 
-        assert result.discovery_mode == "generated"
-        mock_keyword_generator.generate_selection_keywords.assert_called_once_with(
+        assert result.discovery_mode == "seed_pool"
+        mock_seed_pool_builder.build_seed_pool.assert_called_once_with(
             category="electronics",
+            user_keywords=None,
             region="DE",
-            limit=20,
-            expand_top_n=5,
+            platform=None,
+            max_seeds=20,
         )
         mock_demand_validator.validate_batch.assert_called_once_with(
             keywords=["smart watch"],

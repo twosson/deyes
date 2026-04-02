@@ -288,8 +288,8 @@ def trigger_keyword_based_selection(
     This task is called after keyword generation to automatically start
     product discovery for trending keywords.
 
-    Opportunity-first refactor: Uses alibaba_1688 platform to leverage
-    AlphaShop newproduct.report opportunity discovery.
+    Seller-first refactor: Uses alibaba_1688 platform to leverage
+    AlphaShop search intelligence and optional opportunity enhancement.
 
     Args:
         category: Product category

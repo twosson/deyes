@@ -1,12 +1,13 @@
 """Demand discovery service for unified keyword discovery and validation.
 
-Opportunity-first facade:
+Seller-first discovery facade:
 1. Build seed pool from user/category context
-2. Legitimize seeds into AlphaShop-valid keywords when available
+2. Legitimize seeds into AlphaShop-valid search intelligence
 3. Validate demand quality
 4. Return backward-compatible validated_keywords plus rich metadata
 
 All 1688 searches MUST go through this service when demand discovery is enabled.
+Runtime keyword generation is not used in the online selection path.
 """
 from __future__ import annotations
 
@@ -17,7 +18,6 @@ from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.services.demand_validator import DemandValidationResult, DemandValidator
 from app.services.exploration_seed_provider import ExplorationBrief, ExplorationSeedProvider
-from app.services.keyword_generator import KeywordGenerator
 from app.services.keyword_legitimizer import KeywordLegitimizerService, ValidKeyword
 from app.services.seed_pool_builder import Seed, SeedPoolBuilderService
 
@@ -127,11 +127,9 @@ class DemandDiscoveryService:
             cache_ttl_seconds=self.settings.demand_validation_cache_ttl_seconds,
             enable_cache=self.settings.enable_demand_validation,
         )
-        self.keyword_generator = keyword_generator or KeywordGenerator(
-            cache_ttl_seconds=self.settings.keyword_generation_cache_ttl_seconds,
-            enable_cache=self.settings.enable_keyword_generation,
-            min_trend_score=self.settings.keyword_generation_min_trend_score,
-        )
+        # KeywordGenerator remains available for offline / nightly expansion workflows,
+        # but is not used in the online demand discovery path.
+        self.keyword_generator = keyword_generator
         self.seed_pool_builder = seed_pool_builder or SeedPoolBuilderService()
         self.keyword_legitimizer = keyword_legitimizer or KeywordLegitimizerService()
         self.exploration_seed_provider = exploration_seed_provider or ExplorationSeedProvider()
@@ -226,63 +224,35 @@ class DemandDiscoveryService:
             accumulated_rejections.extend(user_result.rejected_keywords)
             prior_results.append(user_result)
 
-        if not self.settings.product_selection_enable_runtime_keyword_generation:
-            self.logger.warning(
-                "demand_discovery_no_valid_keywords",
-                category=category,
-                region=normalized_region,
-                platform=platform,
-                rejected=len(accumulated_rejections),
-            )
-
-            final_result = self._merge_results(
-                discovery_mode="none",
-                fallback_used=False,
-                degraded=True,
-                results=prior_results,
-                rejected_keywords=accumulated_rejections,
-                degraded_reason=self._first_degraded_reason(prior_results) or "no_valid_keywords",
-            )
-            self._log_metrics(
-                category=category,
-                region=normalized_region,
-                platform=platform,
-                result=final_result,
-                success=False,
-                skip=True,
-                generated_recovery=False,
-            )
-            return final_result
-
-        # 2. Runtime generation as explicit seed expansion path.
-        generated_result = await self._discover_from_generated_keywords(
-            category=normalized_category,
-            region=normalized_region,
-            platform=platform,
-            max_keywords=max_keywords,
-        )
-        if generated_result.validated_keywords:
-            generated_recovery = bool(prior_results)
-            merged_result = self._merge_results(
-                discovery_mode=generated_result.discovery_mode,
-                fallback_used=False,
-                degraded=generated_result.degraded or generated_recovery,
-                results=prior_results + [generated_result],
-                rejected_keywords=accumulated_rejections + generated_result.rejected_keywords,
-            )
-            self._log_metrics(
+        # 2. Category/context seed pool discovery. This is the only non-user online path.
+        if normalized_category:
+            seed_pool_result = await self._discover_from_seed_pool(
                 category=normalized_category,
                 region=normalized_region,
                 platform=platform,
-                result=merged_result,
-                success=True,
-                skip=False,
-                generated_recovery=generated_recovery,
+                max_keywords=max_keywords,
             )
-            return merged_result
+            if seed_pool_result.validated_keywords:
+                merged_result = self._merge_results(
+                    discovery_mode=seed_pool_result.discovery_mode,
+                    fallback_used=False,
+                    degraded=seed_pool_result.degraded or bool(prior_results),
+                    results=prior_results + [seed_pool_result],
+                    rejected_keywords=accumulated_rejections + seed_pool_result.rejected_keywords,
+                )
+                self._log_metrics(
+                    category=normalized_category,
+                    region=normalized_region,
+                    platform=platform,
+                    result=merged_result,
+                    success=True,
+                    skip=False,
+                    generated_recovery=False,
+                )
+                return merged_result
 
-        accumulated_rejections.extend(generated_result.rejected_keywords)
-        prior_results.append(generated_result)
+            accumulated_rejections.extend(seed_pool_result.rejected_keywords)
+            prior_results.append(seed_pool_result)
 
         # 3. Nothing validated.
         self.logger.warning(
@@ -377,17 +347,21 @@ class DemandDiscoveryService:
         result.seeds = [seed.to_dict() for seed in exploration_seeds]
         return result
 
-    async def _discover_from_generated_keywords(
+    async def _discover_from_seed_pool(
         self,
         *,
-        category: Optional[str],
+        category: str,
         region: str,
         platform: Optional[str],
         max_keywords: int,
     ) -> DemandDiscoveryResult:
-        """Discover keywords by seed pool building plus optional legacy keyword expansion."""
+        """Discover keywords via category seed pool (static, historical, seasonal).
+
+        This is the only non-user online discovery path. It does not use runtime
+        keyword generation.
+        """
         self.logger.info(
-            "demand_discovery_generating_keywords",
+            "demand_discovery_seed_pool_started",
             category=category,
             region=region,
         )
@@ -400,60 +374,30 @@ class DemandDiscoveryService:
             max_seeds=max_keywords * 2,
         )
 
-        generated_seeds: list[Seed] = []
-        try:
-            keyword_results = await self.keyword_generator.generate_selection_keywords(
-                category=category,
-                region=region,
-                limit=max_keywords * 2,
-                expand_top_n=min(5, max_keywords),
-            )
-            for result in keyword_results:
-                generated_seeds.append(
-                    Seed(
-                        term=result.keyword,
-                        source="generated",
-                        confidence=0.6,
-                        category=category,
-                        region=region,
-                        platform=platform,
-                    )
-                )
-        except Exception as exc:
-            self.logger.warning(
-                "demand_discovery_generation_failed",
-                category=category,
-                region=region,
-                error=str(exc),
-            )
-
-        seeds_for_discovery = generated_seeds or base_seeds
-        all_metadata_seeds = self._merge_seed_lists(base_seeds, generated_seeds)
-
-        if not seeds_for_discovery:
+        if not base_seeds:
             return DemandDiscoveryResult(
                 validated_keywords=[],
                 rejected_keywords=[],
-                discovery_mode="generated",
+                discovery_mode="seed_pool",
                 fallback_used=False,
                 degraded=True,
-                seeds=[seed.to_dict() for seed in all_metadata_seeds],
+                seeds=[],
                 valid_keywords=[],
                 seed_to_keyword_mapping=[],
                 degraded_reason="no_seed_candidates_available",
             )
 
         result = await self._discover_from_seeds(
-            seeds=seeds_for_discovery,
+            seeds=base_seeds,
             category=category,
             region=region,
             platform=platform,
             max_keywords=max_keywords,
-            discovery_mode="generated",
-            degraded=not bool(generated_seeds),
-            degraded_reason=None if generated_seeds else "seed_pool_only",
+            discovery_mode="seed_pool",
+            degraded=False,
+            degraded_reason=None,
         )
-        result.seeds = [seed.to_dict() for seed in all_metadata_seeds]
+        result.seeds = [seed.to_dict() for seed in base_seeds]
         return result
 
     async def _discover_from_seeds(
@@ -469,7 +413,7 @@ class DemandDiscoveryService:
         degraded: bool = False,
         degraded_reason: Optional[str] = None,
     ) -> DemandDiscoveryResult:
-        """Run opportunity-first discovery front-half: seed -> legitimized keyword -> validation."""
+        """Run seller-first discovery front-half: seed -> search intelligence -> validation."""
         serialized_seeds = [seed.to_dict() for seed in seeds]
 
         valid_keyword_results = await self.keyword_legitimizer.legitimize_seeds(
@@ -578,62 +522,6 @@ class DemandDiscoveryService:
 
         return validated[:max_keywords], rejected
 
-    async def _validate_keywords(
-        self,
-        *,
-        keywords: list[str],
-        source: str,
-        category: Optional[str],
-        region: str,
-        platform: Optional[str] = None,
-        max_keywords: int,
-        discovery_mode: Optional[str] = None,
-        source_map: Optional[dict[str, str]] = None,
-        fallback_used: bool = False,
-        degraded: bool = False,
-        metadata_map: Optional[dict[str, dict]] = None,
-    ) -> DemandDiscoveryResult:
-        """Validate a set of keywords and split them into passed/failed lists."""
-        if not keywords:
-            return DemandDiscoveryResult(
-                validated_keywords=[],
-                rejected_keywords=[],
-                discovery_mode=discovery_mode or source,
-                fallback_used=fallback_used,
-                degraded=degraded,
-            )
-
-        validation_results = await self.demand_validator.validate_batch(
-            keywords=keywords,
-            category=category,
-            region=region,
-            platform=platform,
-        )
-
-        validated: list[DemandDiscoveryKeyword] = []
-        rejected: list[DemandDiscoveryKeyword] = []
-
-        for result in validation_results:
-            keyword_source = source_map.get(result.keyword, source) if source_map else source
-            keyword_result = DemandDiscoveryKeyword(
-                keyword=result.keyword,
-                source=keyword_source,
-                validation=result,
-                metadata=(metadata_map or {}).get(result.keyword),
-            )
-            if result.passed:
-                validated.append(keyword_result)
-            else:
-                rejected.append(keyword_result)
-
-        return DemandDiscoveryResult(
-            validated_keywords=validated[:max_keywords],
-            rejected_keywords=rejected,
-            discovery_mode=discovery_mode or source,
-            fallback_used=fallback_used,
-            degraded=degraded,
-        )
-
     def _merge_results(
         self,
         *,
@@ -697,18 +585,6 @@ class DemandDiscoveryService:
             seed_to_keyword_mapping=mappings,
             degraded_reason=degraded_reason,
         )
-
-    def _merge_seed_lists(self, *seed_groups: list[Seed]) -> list[Seed]:
-        """Merge seed lists while preserving order and deduplicating."""
-        merged: list[Seed] = []
-        seen: set[tuple[str, str]] = set()
-        for group in seed_groups:
-            for seed in group:
-                key = (seed.term.strip().lower(), seed.source.strip().lower())
-                if key not in seen:
-                    seen.add(key)
-                    merged.append(seed)
-        return merged
 
     def _first_degraded_reason(self, results: list[DemandDiscoveryResult]) -> Optional[str]:
         """Return first available degraded reason."""

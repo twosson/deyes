@@ -1,4 +1,4 @@
-"""Seed pool builder service for opportunity-first product selection.
+"""Seed pool builder service for seller-first product selection.
 
 Converts category + user keywords into a seed pool for keyword legitimization.
 """

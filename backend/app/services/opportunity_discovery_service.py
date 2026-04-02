@@ -1,4 +1,4 @@
-"""Opportunity discovery service for opportunity-first product selection.
+"""Opportunity discovery service for seller-first product selection.
 
 Uses AlphaShop newproduct.report API to discover market opportunities from valid keywords.
 """

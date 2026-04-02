@@ -130,9 +130,9 @@ class SupplierMatcherService:
 
         Handles two payload structures:
         1. Traditional structure: flat keys like company_name, source_url, etc.
-        2. Opportunity-first structure: alphashop_report_item with nested providerInfo.
+        2. AlphaShop report-item structure: alphashop_report_item with nested providerInfo.
         """
-        # Handle opportunity-first structure: extract from AlphaShop report item
+        # Handle AlphaShop report-item structure: extract from AlphaShop report item
         alphashop_item = raw_payload.get("alphashop_report_item")
         if alphashop_item and isinstance(alphashop_item, dict):
             provider_info = alphashop_item.get("providerInfo")

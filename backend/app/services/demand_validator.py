@@ -1467,7 +1467,7 @@ class DemandValidator:
     ) -> list[DemandValidationResult]:
         """Validate already-legitimized keywords without re-running AlphaShop discovery.
 
-        This path is used by the opportunity-first discovery facade after seed -> valid keyword
+        This path is used by the seller-first discovery facade after seed -> search intelligence
         legitimization. It reuses AlphaShop-derived metrics already present on the valid keyword
         objects and only falls back to provider lookup when needed.
         """

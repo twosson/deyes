@@ -756,7 +756,31 @@ class ProductSelectorAgent(BaseAgent):
         return None
 
     def _extract_opportunity_product_price(self, item: dict[str, Any]) -> Decimal | None:
-        """Extract platform price from newproduct.report item."""
+        """Extract platform price from newproduct.report item.
+
+        Priority:
+        1. spInfo.spPriceMin/Max midpoint (target platform selling price in USD)
+        2. Fallback to top-level price field (legacy compatibility)
+
+        Note: spItmMidPrice is 1688 supplier price (CNY), NOT target platform price.
+        """
+        # Try spInfo price range first (recommended)
+        sp_info = item.get("spInfo", {})
+        min_price_obj = sp_info.get("spPriceMin", {}).get("value", {})
+        max_price_obj = sp_info.get("spPriceMax", {}).get("value", {})
+
+        min_price = self._coerce_decimal(min_price_obj.get("amount"))
+        max_price = self._coerce_decimal(max_price_obj.get("amount"))
+
+        # Use midpoint of min/max range as target selling price
+        if min_price is not None and max_price is not None:
+            return (min_price + max_price) / Decimal("2")
+        elif min_price is not None:
+            return min_price
+        elif max_price is not None:
+            return max_price
+
+        # Fallback to legacy price field
         value = item.get("price")
         if isinstance(value, dict):
             value = value.get("price") or value.get("amount")

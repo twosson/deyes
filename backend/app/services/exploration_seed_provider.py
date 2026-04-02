@@ -21,7 +21,10 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 
+from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.core.seasonal_calendar import get_seasonal_calendar
+from app.services.seasonal_seed_expander import SeasonalSeedExpander
 
 logger = get_logger(__name__)
 
@@ -83,9 +86,14 @@ class ExplorationSeedProvider:
         "CN": ["数码配件", "家居收纳", "厨房用品"],
     }
 
-    def __init__(self):
+    def __init__(
+        self,
+        seasonal_seed_expander: Optional[SeasonalSeedExpander] = None,
+    ):
         """Initialize exploration seed provider."""
         self.logger = logger
+        self.settings = get_settings()
+        self.seasonal_seed_expander = seasonal_seed_expander or SeasonalSeedExpander()
 
     async def get_exploration_seeds(
         self,
@@ -180,14 +188,68 @@ class ExplorationSeedProvider:
     async def _get_trend_seeds(self, brief: ExplorationBrief) -> list[ExplorationSeed]:
         """Get seeds from market trend signals.
 
-        Returns seasonal and platform-specific trend seeds.
+        Returns seasonal LLM-generated seeds from upcoming events.
+        Falls back to static trend seeds if LLM expansion fails.
 
         Returns:
             List of trend seeds with confidence 0.4-0.6
         """
         seeds: list[ExplorationSeed] = []
+        region = (brief.region or "US").upper()
 
-        # Seasonal trends
+        # Try seasonal LLM expansion first
+        if self.settings.seed_enable_seasonal_llm_expansion:
+            try:
+                calendar = get_seasonal_calendar(lookahead_days=90)
+                upcoming_events = calendar.get_upcoming_events(category=None)
+
+                for event in upcoming_events:
+                    # Get top 2 categories by boost factor for each event
+                    event_categories = sorted(
+                        event.categories.keys(),
+                        key=lambda c: event.categories[c],
+                        reverse=True
+                    )[:2]
+
+                    for category in event_categories:
+                        expanded_phrases = await self.seasonal_seed_expander.expand(
+                            event=event,
+                            category=category,
+                            region=region,
+                            limit=min(3, brief.max_seeds),  # Conservative for exploration mode
+                        )
+
+                        for phrase in expanded_phrases:
+                            seeds.append(
+                                ExplorationSeed(
+                                    term=phrase,
+                                    source="trend",
+                                    confidence=0.5,
+                                    metadata={
+                                        "signal_type": "seasonal_llm",
+                                        "event_name": event.name,
+                                        "category": category,
+                                        "region": region,
+                                    },
+                                )
+                            )
+
+                if seeds:
+                    self.logger.info(
+                        "exploration_seasonal_llm_seeds_generated",
+                        count=len(seeds),
+                        region=region,
+                        upcoming_events=[e.name for e in upcoming_events],
+                    )
+                    return seeds
+            except Exception as exc:
+                self.logger.warning(
+                    "exploration_seasonal_llm_failed",
+                    region=region,
+                    error=str(exc),
+                )
+
+        # Fallback to static seasonal trends
         month = datetime.now(timezone.utc).month
         if month in {3, 4, 5}:
             season = "spring"
